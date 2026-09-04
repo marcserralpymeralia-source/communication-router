@@ -8,7 +8,7 @@
       <h2>{{ communication.subject or "Sin asunto" }}</h2>
       <p class="muted">{{ communication.sender_name or "Sin remitente" }} · {{ communication.sender_email or "" }}</p>
     </div>
-    <span class="badge">{{ communication.routing_status }}</span>
+    <span class="badge {{ communication.routing_status|status_class }}">{{ communication.routing_status|status_label }}</span>
   </div>
 
   {% if error %}<div class="subpanel status-error">{{ error }}</div>{% endif %}
@@ -25,7 +25,7 @@
     </article>
 
     <aside class="subpanel stack">
-      <div class="section-title-row"><h3>Routing</h3><span class="badge">{{ decision.status if decision else "unclassified" }}</span></div>
+      <div class="section-title-row"><h3>Routing</h3><span class="badge {{ (decision.status if decision else communication.routing_status)|status_class }}">{{ (decision.status if decision else communication.routing_status)|status_label }}</span></div>
       {% if decision %}
         <div><strong>Propuesta:</strong> {{ decision.department_id or "Sin departamento" }}</div>
         <div><strong>Categoría:</strong> {{ decision.category }}</div>
@@ -56,6 +56,22 @@
       <form method="post" action="/communications/{{ communication.id }}/analyze">
         <button class="button secondary" type="submit">Analizar comunicación</button>
       </form>
+      {% if forward_action %}
+        <div class="subpanel stack">
+          <div class="section-title-row">
+            <h4>Forwarding</h4>
+            <span class="badge {{ forward_action.status|status_class }}">{{ forward_action.status|status_label }}</span>
+          </div>
+          <div class="muted">Destino: {{ forward_action.destination_email }}</div>
+          {% if forward_action.error_message %}<p class="status-error">{{ forward_action.error_message }}</p>{% endif %}
+        </div>
+      {% endif %}
+      {% if decision and decision.final_department_id and (not forward_action or forward_action.status not in ["sent", "processing"]) %}
+        <form method="post" action="/communications/{{ communication.id }}/forward">
+          <input type="hidden" name="decision_id" value="{{ decision.id }}">
+          <button class="button" type="submit">Reenviar al departamento</button>
+        </form>
+      {% endif %}
     </aside>
   </div>
 

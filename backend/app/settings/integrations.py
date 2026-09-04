@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.agent.prompt_runtime import run_prompt_execution
 from app.communications.service import add_communication_attachment, create_or_update_communication_from_email, mark_communication_processed
+from app.routing.auto import enqueue_automatic_routing
 from app.core.encryption import decrypt_secret
 from app.db.models import Communication, Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
 from app.master.models import EmailSyncState, MailboxSyncState
@@ -672,6 +673,8 @@ def _fetch_imap_emails(
     errors = 0
     downloaded = 0
     discarded = 0
+    routing_jobs_enqueued = 0
+    routing_job_errors = 0
     mailbox = settings.mailbox or settings.inbox_folder or "INBOX"
     last_processed_uid: str | None = None
     should_auto_process = settings.auto_process_on_fetch if auto_process is None else auto_process
@@ -789,6 +792,7 @@ def _fetch_imap_emails(
         found = len(ids)
         batch_size = max(min(int(batch_size or settings.read_limit or 10), IMAP_MAX_MESSAGES_PER_RUN), 1)
         saved_email_ids: list[int] = []
+        processed_communication_ids: list[int] = []
         checkpoint_uid = sync_state.last_checkpoint_uid if sync_state and sync_state.backfill_status == "paused" else None
         if sync_state and sync_state.backfill_status == "running" and sync_state.backfill_last_uid:
             checkpoint_uid = sync_state.backfill_last_uid
@@ -922,6 +926,7 @@ def _fetch_imap_emails(
                     inbound_message.original_content = body
                     if communication:
                         mark_communication_processed(db, communication)
+                        processed_communication_ids.append(communication.id)
                     saved += 1
                     saved_email_ids.append(email.id)
                     processed_since_checkpoint += 1
@@ -948,6 +953,26 @@ def _fetch_imap_emails(
                     )
                     continue
             db.commit()
+            for communication_id in processed_communication_ids:
+                try:
+                    if enqueue_automatic_routing(
+                        db,
+                        company_id=company_id,
+                        communication_id=communication_id,
+                    ) is not None:
+                        routing_jobs_enqueued += 1
+                except Exception:  # Auto-routing must never break IMAP ingestion.
+                    routing_job_errors += 1
+                    db.rollback()
+                    logger.warning(
+                        "email.sync.routing_enqueue_error",
+                        extra={
+                            "event": "email.sync.routing_enqueue_error",
+                            "company_id": company_id,
+                            "communication_id": communication_id,
+                            "error_type": "routing_enqueue_error",
+                        },
+                    )
             if should_auto_process and saved_email_ids:
                 for email_id in saved_email_ids:
                     enqueue_job(
@@ -981,6 +1006,7 @@ def _fetch_imap_emails(
             if sync_state and sync_state.backfill_status in {"paused", "cancelled"}:
                 break
             saved_email_ids.clear()
+            processed_communication_ids.clear()
 
             if stop_after_batch and offset + batch_size < len(ids):
                 has_more = True
@@ -1085,6 +1111,8 @@ def _fetch_imap_emails(
                 "discarded": discarded,
                 "errors": errors,
                 "attachments_saved": attachments_saved,
+                "routing_jobs_enqueued": routing_jobs_enqueued,
+                "routing_job_errors": routing_job_errors,
             },
         )
         return {
@@ -1095,6 +1123,8 @@ def _fetch_imap_emails(
             "duplicates": duplicates,
             "discarded": discarded,
             "attachments": attachments_saved,
+            "routing_jobs_enqueued": routing_jobs_enqueued,
+            "routing_job_errors": routing_job_errors,
             "errors": errors,
             "uidvalidity": uidvalidity,
             "last_seen_uid_before": last_seen_uid_before,
@@ -1130,7 +1160,7 @@ def _fetch_imap_emails(
                 progress=processed_since_checkpoint if "processed_since_checkpoint" in locals() else 0,
                 total=found,
             )
-        return {"ok": False, "found": found, "downloaded": downloaded, "saved": saved, "duplicates": duplicates, "discarded": discarded, "attachments": attachments_saved, "errors": errors, "message": message}
+        return {"ok": False, "found": found, "downloaded": downloaded, "saved": saved, "duplicates": duplicates, "discarded": discarded, "attachments": attachments_saved, "errors": errors, "routing_jobs_enqueued": routing_jobs_enqueued, "routing_job_errors": routing_job_errors, "message": message}
     finally:
         sync_lock.release()
 

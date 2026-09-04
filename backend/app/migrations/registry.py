@@ -1235,6 +1235,47 @@ def _apply_tenant_email_favorites(engine, dry_run: bool) -> list[str]:  # noqa: 
     return ensure_columns(engine, "emails", {"is_favorite": "BOOLEAN DEFAULT false"}, dry_run=dry_run)
 
 
+def _apply_tenant_auto_routing(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(
+        engine,
+        "llm_settings",
+        {"auto_routing_enabled": "BOOLEAN DEFAULT false"},
+        dry_run=dry_run,
+    )
+
+
+def _apply_tenant_routing_actions(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import RoutingAction
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        if "routing_actions" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE routing_actions (...)")
+            if not dry_run:
+                RoutingAction.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
+            RoutingAction.__table__.create(bind=engine, checkfirst=True)
+    return actions
+
+
+def _apply_tenant_auto_forwarding(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    actions = ensure_columns(
+        engine,
+        "llm_settings",
+        {"auto_forwarding_enabled": "BOOLEAN DEFAULT false"},
+        dry_run=dry_run,
+    )
+    actions.extend(
+        ensure_columns(
+            engine,
+            "routing_actions",
+            {"source": "VARCHAR(30) DEFAULT 'manual'"},
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1328,6 +1369,29 @@ TENANT_SCHEMA_MIGRATIONS = [
             "communication_history",
         ),
         upgrade=_apply_tenant_routing_decisions,
+    ),
+    MigrationSpec(
+        version="2026.09.04.1",
+        name="tenant automatic communication routing",
+        checksum=checksum_text("tenant", "automatic_communication_routing", "llm_settings.auto_routing_enabled"),
+        upgrade=_apply_tenant_auto_routing,
+    ),
+    MigrationSpec(
+        version="2026.09.04.2",
+        name="tenant routing actions",
+        checksum=checksum_text("tenant", "routing_actions", "idempotency", "tenant_foreign_keys"),
+        upgrade=_apply_tenant_routing_actions,
+    ),
+    MigrationSpec(
+        version="2026.09.04.3",
+        name="tenant automatic forwarding",
+        checksum=checksum_text(
+            "tenant",
+            "automatic_forwarding",
+            "llm_settings.auto_forwarding_enabled",
+            "routing_actions.source",
+        ),
+        upgrade=_apply_tenant_auto_forwarding,
     ),
 ]
 

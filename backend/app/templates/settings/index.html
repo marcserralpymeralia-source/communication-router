@@ -768,6 +768,9 @@
         </div>
         <div class="form-grid">
           <label>Agente activo<input name="agent_enabled" type="checkbox" {% if llm.agent_enabled %}checked{% endif %}></label>
+          <label>Auto-routing de comunicaciones<input name="auto_routing_enabled" type="checkbox" {% if llm.auto_routing_enabled %}checked{% endif %}></label>
+          <label>Reenviar automáticamente decisiones seguras<input name="auto_forwarding_enabled" type="checkbox" {% if llm.auto_forwarding_enabled %}checked{% endif %}></label>
+          <p class="muted span-2">Son controles independientes: activar el routing no activa el envío. El reenvío automático solo se realiza con alta confianza, sin revisión ni ambigüedad.</p>
           <label>Modo<select name="agent_mode"><option value="semiautomatico" {% if llm.agent_mode == "semiautomatico" %}selected{% endif %}>Semiautomático</option><option value="automatico" {% if llm.agent_mode == "automatico" %}selected{% endif %}>Automático</option><option value="desactivado" {% if llm.agent_mode == "desactivado" %}selected{% endif %}>Desactivado</option></select></label>
           <label>Proveedor<select name="provider">{% for option in llm_provider_options %}<option value="{{ option.value }}" {% if llm.provider == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
           <label>API key<input name="api_key_encrypted" type="password" placeholder="{{ mask_secret(llm.api_key_encrypted) }}"></label>

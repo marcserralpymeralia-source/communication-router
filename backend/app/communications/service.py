@@ -13,7 +13,14 @@ from app.core.attachment_storage import save_attachment
 from app.db.models import Communication, CommunicationAttachment
 
 PROCESSING_STATUSES = {"received", "parsing", "processed", "error"}
-ROUTING_STATUSES = {"unclassified", "pending_review", "routed"}
+ROUTING_STATUSES = {
+    "unclassified",
+    "routing_queued",
+    "routing_processing",
+    "pending_review",
+    "routed",
+    "routing_error",
+}
 
 
 def _now() -> datetime:

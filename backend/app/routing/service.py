@@ -89,6 +89,11 @@ class RoutingRuntime(Protocol):
 class RoutingValidationError(ValueError):
     """Raised when an LLM response cannot be safely used for routing."""
 
+    def __init__(self, message: str, *, retryable: bool = False, error_type: str | None = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.error_type = error_type
+
 
 ContextBuilder = Callable[[int, Session], dict[str, Any]]
 
@@ -342,6 +347,7 @@ def _routing_status_for(proposal: RoutingProposal, thresholds: RoutingThresholds
         proposal.proposed_department_id is None
         or proposal.requires_review
         or proposal.confidence < thresholds.review_confidence
+        or (proposal.ambiguity_reason or "").strip()
     ):
         return "pending_review"
     if proposal.confidence >= thresholds.auto_route_confidence:
@@ -356,6 +362,7 @@ def analyze_communication(
     runtime: RoutingRuntime | Callable[..., Any],
     *,
     user_id: int | None = None,
+    source: str = "agent",
     thresholds: RoutingThresholds = DEFAULT_ROUTING_THRESHOLDS,
     routing_context: dict[str, Any] | None = None,
 ) -> RoutingDecision:
@@ -381,6 +388,7 @@ def analyze_communication(
             previous.updated_at = datetime.now(timezone.utc)
     analysis_number = max((item.analysis_number or 0 for item in previous_decisions), default=0) + 1
     now = datetime.now(timezone.utc)
+    decision_status = _routing_status_for(proposal, thresholds)
     decision = RoutingDecision(
         company_id=company_id,
         communication_id=communication_id,
@@ -391,12 +399,15 @@ def analyze_communication(
         requires_review=proposal.requires_review,
         reason=proposal.reason,
         ambiguity_reason=proposal.ambiguity_reason,
-        status=_routing_status_for(proposal, thresholds),
-        source="agent",
+        status=decision_status,
+        source=source,
         analysis_number=analysis_number,
         created_at=now,
         updated_at=now,
     )
+    if decision_status == "routed":
+        decision.final_department_id = proposal.proposed_department_id
+        decision.final_category = proposal.category
     db.add(decision)
     communication.routing_status = decision.status if decision.status in {"pending_review", "routed"} else "pending_review"
     communication.updated_at = now

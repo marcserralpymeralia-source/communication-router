@@ -29,7 +29,7 @@
             <td>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if item.received_at else "Sin fecha" }}</td>
             <td>{{ item.sender_name or item.sender_email or "Sin remitente" }}</td>
             <td><strong>{{ item.subject or "Sin asunto" }}</strong></td>
-            <td><span class="badge">{{ item.routing_status }}</span></td>
+            <td><span class="badge {{ item.routing_status|status_class }}">{{ item.routing_status|status_label }}</span></td>
             <td><a class="button secondary compact-button" href="/communications/workbench/{{ item.id }}">Abrir</a></td>
           </tr>
         {% else %}

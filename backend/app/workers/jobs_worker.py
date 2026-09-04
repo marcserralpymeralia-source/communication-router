@@ -32,6 +32,8 @@ from app.master.models import EmailSyncState, MailboxSyncState, MasterTenantData
 from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.knowledge.service import index_knowledge_entries
 from app.orders.service import _customer_label, _sync_customer_product_knowledge, validate_confirmation
+from app.routing.auto import AUTO_ROUTING_JOB_TYPE, process_automatic_routing
+from app.routing.forwarding import AUTO_FORWARD_JOB_TYPE, process_forwarding_job
 from app.semantic_retrieval.products import index_products
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.mailboxes.service import get_or_create_mailbox_sync_state
@@ -63,6 +65,8 @@ JOB_TYPES = {
     "bulk_order_action",
     "index_product_embeddings",
     "index_knowledge_entries",
+    AUTO_ROUTING_JOB_TYPE,
+    AUTO_FORWARD_JOB_TYPE,
 }
 
 
@@ -137,6 +141,10 @@ def _email_job_context(db, master_db, company_id: int, payload: dict):  # noqa: 
 
 def _process_job(db, job: BackgroundJob) -> dict:
     payload = job_payload(job)
+    if job.job_type == AUTO_ROUTING_JOB_TYPE:
+        return process_automatic_routing(db, job)
+    if job.job_type == AUTO_FORWARD_JOB_TYPE:
+        return process_forwarding_job(db, job)
     if job.job_type in {"import_confirm", "import_file"}:
         return _process_import_job(db, job, payload)
     if job.job_type in {"export_order", "export_order_ftp"}:

@@ -592,6 +592,58 @@ class RoutingCorrection(Base):
     )
 
 
+class RoutingAction(Base):
+    __tablename__ = "routing_actions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    communication_id: Mapped[int] = mapped_column(Integer, index=True)
+    routing_decision_id: Mapped[int] = mapped_column(Integer, index=True)
+    department_id: Mapped[int] = mapped_column(Integer, index=True)
+    triggered_by_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    action_type: Mapped[str] = mapped_column(String(40), default="forward")
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    destination_email: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    provider_message_id: Mapped[str | None] = mapped_column(String(255))
+    error_code: Mapped[str | None] = mapped_column(String(120))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "communication_id"),
+            ("communications.company_id", "communications.id"),
+            name="fk_routing_action_communication_company",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "routing_decision_id"),
+            ("routing_decisions.company_id", "routing_decisions.id"),
+            name="fk_routing_action_decision_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_routing_action_department_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "triggered_by_user_id"),
+            ("users.company_id", "users.id"),
+            name="fk_routing_action_trigger_user_company",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("company_id", "idempotency_key"),
+    )
+
+
 class EmailTemplate(Base):
     __tablename__ = "email_templates"
 
@@ -617,6 +669,8 @@ class LLMSettings(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), unique=True)
     agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_routing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_forwarding_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     agent_mode: Mapped[str] = mapped_column(String(80), default="semiautomatico")
     safety_level: Mapped[str] = mapped_column(String(50), default="equilibrado")
     provider: Mapped[str] = mapped_column(String(50), default="openai")

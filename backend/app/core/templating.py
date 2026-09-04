@@ -25,6 +25,10 @@ def status_label(value: str | None) -> str:
     labels = {
         "pedido_pendiente_revision": "Pendiente de revisión",
         "pending_review": "Pendiente de revisión",
+        "unclassified": "Sin analizar",
+        "routing_queued": "Routing en cola",
+        "routing_processing": "Routing en curso",
+        "routing_error": "Error de routing",
         "pending": "Pendiente",
         "pedido_confirmado": "Confirmado",
         "pedido_validado": "Confirmado",
@@ -42,6 +46,9 @@ def status_label(value: str | None) -> str:
         "cerrado": "Cerrado",
         "cancelado": "Cancelado",
         "sent": "Enviado",
+        "processing": "Enviando",
+        "failed": "Error de envío",
+        "cancelled": "Cancelado",
         "error": "Error",
         "pedido": "Pedido",
         "consulta": "Consulta",
@@ -74,18 +81,22 @@ def status_label(value: str | None) -> str:
 
 def status_class(value: str | None) -> str:
     value = (value or "").lower().strip()
-    if value in {"pedido_pendiente_revision", "pending_review", "pending", "draft", "open"}:
+    if value in {"pedido_pendiente_revision", "pending_review", "pending", "processing", "draft", "open", "routing_queued", "routing_processing"}:
         return "status-pending"
     if value in {"pedido_validado", "pedido_confirmado", "confirmed", "resolved", "safe", "ready"}:
         return "status-confirmed"
     if value in {"pedido_exportado", "exported", "sent"}:
         return "status-exported"
+    if value in {"failed"}:
+        return "status-error"
     if value in {"cerrado", "cancelado"}:
         return "status-confirmed"
-    if value.startswith("error") or value in {"export_failed", "order_blocked", "automation_blocked"}:
+    if value.startswith("error") or value in {"export_failed", "order_blocked", "automation_blocked", "routing_error"}:
         return "status-error"
     if value == "no_pedido":
         return "status-no-order"
+    if value == "cancelled":
+        return "status-discarded"
     if value in {"dudoso", "doubtful", "reviewable", "no_importable", "not_importable"}:
         return "status-doubtful"
     if value in {"descartado", "discarded", "deleted", "archived_deleted", "ignored"}:

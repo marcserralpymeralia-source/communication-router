@@ -12,6 +12,8 @@ from app.communications.service import get_communication, list_communications, s
 from app.core.templating import templates
 from app.db.models import Department
 from app.master.service import TenantUser
+from app.routing.auto import enqueue_forwarding_for_decision
+from app.routing.forwarding import current_forward_action, enqueue_forwarding_job, ensure_routing_action, serialize_forward_action
 from app.routing.service import (
     RoutingValidationError,
     analyze_communication,
@@ -109,6 +111,7 @@ def communications_workbench_detail(
             "decision": current_routing_decision(db, user.company_id, communication_id),
             "history": list_routing_decisions(db, user.company_id, communication_id),
             "departments": departments,
+            "forward_action": current_forward_action(db, user.company_id, communication_id),
             "error": request.query_params.get("error"),
         },
     )
@@ -155,6 +158,14 @@ def confirm_communication_action(
         decision = confirm_routing_decision(
             db, user.company_id, communication_id, user.id, decision_id=decision_id
         )
+        enqueue_forwarding_for_decision(
+            db,
+            company_id=user.company_id,
+            decision=decision,
+            triggered_by_user_id=user.id,
+            source="human",
+            human_confirmed=True,
+        )
         db.commit()
     except RoutingValidationError as exc:
         db.rollback()
@@ -186,6 +197,14 @@ def correct_communication_action(
             corrected_category=corrected_category,
             decision_id=decision_id,
         )
+        enqueue_forwarding_for_decision(
+            db,
+            company_id=user.company_id,
+            decision=decision,
+            triggered_by_user_id=user.id,
+            source="human",
+            human_confirmed=True,
+        )
         db.commit()
     except RoutingValidationError as exc:
         db.rollback()
@@ -193,6 +212,45 @@ def correct_communication_action(
     return _routing_redirect(request, communication_id) if "application/json" not in (request.headers.get("accept") or "") else JSONResponse(
         {"ok": True, "decision": serialize_routing_decision(decision)}
     )
+
+
+@router.post("/{communication_id}/forward")
+def forward_communication_action(
+    communication_id: int,
+    request: Request,
+    decision_id: int | None = Form(None),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if user.role.name not in {"Administrador", "Supervisor"}:
+        return _routing_redirect(request, communication_id, error="No tienes permiso para reenviar comunicaciones.")
+    decision = current_routing_decision(db, user.company_id, communication_id)
+    if decision is None or (decision_id is not None and decision.id != decision_id):
+        return _routing_redirect(request, communication_id, error="No existe una decisión final válida para reenviar.")
+    if decision.final_department_id is None:
+        return _routing_redirect(request, communication_id, error="La comunicación todavía no tiene departamento final.")
+    try:
+        action = ensure_routing_action(
+            db,
+            company_id=user.company_id,
+            communication_id=communication_id,
+            routing_decision_id=decision.id,
+            department_id=decision.final_department_id,
+            triggered_by_user_id=user.id,
+            source="manual",
+        )
+        job = enqueue_forwarding_job(db, action)
+        db.commit()
+    except RoutingValidationError as exc:
+        db.rollback()
+        return _routing_redirect(request, communication_id, error=str(exc))
+    payload = {
+        "ok": True,
+        "action_id": action.id,
+        "status": action.status,
+        "job_id": job.id if job else None,
+    }
+    return _routing_redirect(request, communication_id) if "application/json" not in (request.headers.get("accept") or "") else JSONResponse(payload)
 
 
 @router.get("/{communication_id}")
@@ -209,6 +267,7 @@ def communication_detail(
             "ok": True,
             "communication": serialize_communication(communication, include_detail=True),
             "decision": serialize_routing_decision(current_routing_decision(db, user.company_id, communication_id)),
+            "forward_action": serialize_forward_action(current_forward_action(db, user.company_id, communication_id)),
             "decision_history": [
                 serialize_routing_decision(item)
                 for item in list_routing_decisions(db, user.company_id, communication_id)
