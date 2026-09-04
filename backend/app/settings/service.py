@@ -33,7 +33,7 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
         "avoid_duplicates_by_message_id", "allow_reprocess", "auto_create_order_if_detected", "always_human_review", "mark_doubtful_below_threshold",
         "mark_no_order_if_detected", "show_summary_cards", "show_score_column", "show_customer_column", "show_attachments_column", "show_order_column",
         "show_reply_button", "show_process_button", "use_signature", "include_logo_in_signature", "active", "is_default_for_type",
-        "smtp_enabled",
+        "smtp_enabled", "enabled",
         "is_active", "is_default", "supports_text", "supports_attachments", "supports_audio", "supports_documents", "is_secret",
         "agent_enabled", "use_same_model_for_all", "can_read_email", "can_extract_pdf", "can_classify_email", "can_extract_order",
         "can_suggest_customer", "can_suggest_products", "can_calculate_score", "can_create_pending_order", "can_mark_no_order",

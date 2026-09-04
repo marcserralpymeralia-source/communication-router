@@ -17,6 +17,22 @@ from app.db.models import PromptExecution, PromptTemplate, PromptVersion
 
 PromptProvider = Callable[[Any, list[dict], str], dict]
 
+ROUTING_PROMPT_PURPOSE = "communication_department_routing"
+ROUTING_PROMPT_FALLBACK = (
+    "Eres el agente de routing de comunicaciones de una empresa. Tu tarea exclusiva es "
+    "proponer el departamento mas apropiado usando unicamente el contexto organizativo proporcionado.\n\n"
+    "Interpreta la intencion semantica completa. No clasifiques por palabras clave aisladas. "
+    "Considera responsabilidades, exclusiones, ejemplos, excepciones y asignaciones RACI del contexto. "
+    "Una incidencia puede pertenecer a un departamento aunque su nombre no aparezca literalmente. "
+    "Respeta las exclusiones y no inventes departamentos ni IDs.\n\n"
+    "Solo puedes devolver IDs incluidos en el contexto. Si no existe evidencia suficiente, devuelve null. "
+    "En casos ambiguos conserva una alternativa razonable, explica la ambiguedad y marca requires_review=true. "
+    "La confianza debe expresar la evidencia disponible, no una certeza artificial.\n\n"
+    "Devuelve exclusivamente un objeto JSON valido con exactamente estos campos: "
+    "proposed_department_id, category, confidence, requires_review, reason, "
+    "alternative_department_id y ambiguity_reason."
+)
+
 
 PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
     "classification": {
@@ -75,6 +91,27 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
         "fallback": "Extrae un pedido en JSON valido con cliente y pedido.lineas. Cada linea debe incluir texto_original, referencia_detectada, producto_detectado, cantidad, unidad y confianza_extraccion.",
         "input_limit": 16000,
     },
+    ROUTING_PROMPT_PURPOSE: {
+        "name": "Routing de comunicaciones",
+        "purpose": ROUTING_PROMPT_PURPOSE,
+        "default_model": DEFAULT_OPENAI_MODEL,
+        "default_parameters": {"temperature": 0.1, "max_tokens": 1200},
+        "expected_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "proposed_department_id",
+                "category",
+                "confidence",
+                "requires_review",
+                "reason",
+                "alternative_department_id",
+                "ambiguity_reason",
+            ],
+        },
+        "fallback": ROUTING_PROMPT_FALLBACK,
+        "input_limit": 30000,
+    },
 }
 
 ALLOWED_CLASSIFICATION_TYPES = {"pedido", "no_pedido", "consulta", "incidencia", "dudoso"}
@@ -121,6 +158,51 @@ def resolve_prompt_definition(db: Session, company_id: int, purpose: str) -> Pro
         expected_schema=dict(spec.get("expected_schema") or {}),
         input_limit=int(spec.get("input_limit") or 12000),
     )
+
+
+def ensure_prompt_template(
+    db: Session,
+    company_id: int,
+    purpose: str,
+    *,
+    created_by_user_id: int | None = None,
+) -> PromptDefinition:
+    """Ensure a registry prompt has an editable initial version for a tenant."""
+
+    definition = resolve_prompt_definition(db, company_id, purpose)
+    if definition.template and definition.version:
+        return definition
+
+    spec = PROMPT_REGISTRY.get(purpose)
+    if not spec:
+        raise ValueError(f"Prompt no registrado: {purpose}")
+    template = definition.template
+    if template is None:
+        template = PromptTemplate(
+            company_id=company_id,
+            name=str(spec.get("name") or purpose.title()),
+            purpose=purpose,
+        )
+        db.add(template)
+        db.flush()
+
+    last_version = db.scalar(
+        select(PromptVersion.version)
+        .where(PromptVersion.template_id == template.id)
+        .order_by(PromptVersion.version.desc())
+    ) or 0
+    version = PromptVersion(
+        company_id=company_id,
+        template_id=template.id,
+        version=int(last_version) + 1,
+        content=str(spec.get("fallback") or ""),
+        created_by_user_id=created_by_user_id,
+    )
+    db.add(version)
+    db.flush()
+    template.active_version_id = version.id
+    db.flush()
+    return resolve_prompt_definition(db, company_id, purpose)
 
 
 def prompt_registry_snapshot(db: Session, company_id: int) -> list[dict[str, Any]]:
@@ -254,6 +336,42 @@ def validate_prompt_output(purpose: str, content: str) -> PromptValidationResult
             if not isinstance(line, dict):
                 return PromptValidationResult(status="schema_error", data=data, errors=[f"La linea {index} no es un objeto valido."])
         return PromptValidationResult(status="valid", data=data, errors=[])
+    if purpose == ROUTING_PROMPT_PURPOSE:
+        expected_fields = {
+            "proposed_department_id",
+            "category",
+            "confidence",
+            "requires_review",
+            "reason",
+            "alternative_department_id",
+            "ambiguity_reason",
+        }
+        extra_fields = sorted(set(data) - expected_fields)
+        missing_fields = sorted(expected_fields - set(data))
+        if extra_fields or missing_fields:
+            details = []
+            if missing_fields:
+                details.append(f"faltan: {', '.join(missing_fields)}")
+            if extra_fields:
+                details.append(f"sobran: {', '.join(extra_fields)}")
+            return PromptValidationResult(status="schema_error", data=data, errors=[f"Esquema de routing invalido ({'; '.join(details)})."])
+
+        for field in ("proposed_department_id", "alternative_department_id"):
+            value = data[field]
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+                return PromptValidationResult(status="schema_error", data=data, errors=[f"{field} debe ser entero o null."])
+        if not isinstance(data["category"], str) or not data["category"].strip():
+            return PromptValidationResult(status="schema_error", data=data, errors=["category debe ser texto no vacio."])
+        confidence = data["confidence"]
+        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= float(confidence) <= 1:
+            return PromptValidationResult(status="schema_error", data=data, errors=["confidence debe ser numerico entre 0 y 1."])
+        if not isinstance(data["requires_review"], bool):
+            return PromptValidationResult(status="schema_error", data=data, errors=["requires_review debe ser boolean."])
+        if not isinstance(data["reason"], str) or not data["reason"].strip():
+            return PromptValidationResult(status="schema_error", data=data, errors=["reason debe ser texto no vacio."])
+        if data["ambiguity_reason"] is not None and not isinstance(data["ambiguity_reason"], str):
+            return PromptValidationResult(status="schema_error", data=data, errors=["ambiguity_reason debe ser texto o null."])
+        return PromptValidationResult(status="valid", data=data, errors=[])
     return PromptValidationResult(status="valid", data=data, errors=[])
 
 
@@ -264,6 +382,31 @@ def _safe_excerpt(text: str | None, limit: int = 1200) -> str | None:
     if len(clean) <= limit:
         return clean
     return clean[: limit - 1].rstrip() + "…"
+
+
+def _safe_provider_message(message: Any) -> str:
+    """Keep provider diagnostics useful without copying credentials into audit data."""
+
+    text = str(message or "Error llamando al proveedor IA.")[:500]
+    text = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", text)
+    text = re.sub(r"(?i)(api[-_ ]?key\s*[:=]\s*)\S+", r"\1[redacted]", text)
+    return re.sub(r"(?i)\bsk-[A-Za-z0-9_-]+", "sk-[redacted]", text)
+
+
+def persist_prompt_execution(db: Session, execution: PromptExecution, *, commit: bool = False) -> PromptExecution:
+    """Persist one execution without taking ownership of the caller transaction by default."""
+
+    db.add(execution)
+    db.flush()
+    if commit:
+        db.commit()
+    return execution
+
+
+def _provider_exception_status(exc: Exception) -> str:
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    return "provider_error"
 
 
 def run_prompt_execution(
@@ -278,26 +421,56 @@ def run_prompt_execution(
     user_id: int | None = None,
     prompt_override: str | None = None,
     prompt_name_override: str | None = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     definition = resolve_prompt_definition(db, company_id, purpose)
     prompt_text = prompt_override or definition.content
     prompt_name = prompt_name_override or definition.name
-    configured_model = getattr(settings, "classification_model" if purpose == "classification" else "extraction_model", None)
+    model_setting = "extraction_model" if purpose == "extraction" else "classification_model"
+    configured_model = getattr(settings, model_setting, None)
     if purpose == "extraction":
         model = resolve_openai_runtime_model(configured_model, fallback=definition.default_model)
     else:
         model = configured_model or definition.default_model
+    parameters = dict(definition.default_parameters)
+    for key in ("temperature", "max_tokens", "timeout_seconds", "retries"):
+        if hasattr(settings, key):
+            parameters[key] = getattr(settings, key)
     messages = [
         {"role": "system", "content": prompt_text},
         {"role": "user", "content": text[: definition.input_limit]},
     ]
     started_at = datetime.now(timezone.utc)
     start = perf_counter()
-    response = provider_call(settings, messages, model)
+    try:
+        response = provider_call(settings, messages, model)
+    except Exception as exc:  # Provider boundaries must become auditable results.
+        response = {
+            "ok": False,
+            "error_type": _provider_exception_status(exc),
+            "message": _safe_provider_message(exc),
+        }
+    if not isinstance(response, dict):
+        response = {
+            "ok": False,
+            "error_type": "provider_error",
+            "message": "El proveedor IA devolvio una respuesta invalida.",
+        }
     duration_ms = int((perf_counter() - start) * 1000)
     usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
     response_content = response.get("content", "")
-    validation = validate_prompt_output(purpose, response_content) if response.get("ok") else PromptValidationResult(status="provider_error", data=None, errors=[response.get("message") or "Error llamando al proveedor IA."])
+    if not isinstance(response_content, str):
+        response_content = json.dumps(response_content, ensure_ascii=False, default=str) if response_content else ""
+    if response.get("ok"):
+        validation = validate_prompt_output(purpose, response_content)
+    else:
+        safe_message = _safe_provider_message(response.get("message"))
+        response["message"] = safe_message
+        validation = PromptValidationResult(
+            status=str(response.get("error_type") or "provider_error"),
+            data=None,
+            errors=[safe_message],
+        )
     finished_at = datetime.now(timezone.utc)
     response_excerpt = _safe_excerpt(response_content)
     response_hash = sha256(response_content.encode("utf-8")).hexdigest() if response_content else None
@@ -308,7 +481,7 @@ def run_prompt_execution(
         prompt_purpose=purpose,
         prompt_version=definition.version.version if definition.version else 0,
         model=model,
-        parameters_json=json.dumps(definition.default_parameters, ensure_ascii=False),
+        parameters_json=json.dumps(parameters, ensure_ascii=False),
         input_reference=input_reference,
         output_status=validation.status,
         validation_errors_json=json.dumps(validation.errors, ensure_ascii=False) if validation.errors else None,
@@ -321,8 +494,7 @@ def run_prompt_execution(
         finished_at=finished_at,
         duration_ms=duration_ms,
     )
-    db.add(execution)
-    db.commit()
+    persist_prompt_execution(db, execution, commit=commit)
     result = dict(response)
     result.update(
         {
@@ -332,7 +504,7 @@ def run_prompt_execution(
             "prompt_template_id": execution.prompt_template_id,
             "prompt_purpose": purpose,
             "model": model,
-            "parameters": definition.default_parameters,
+            "parameters": parameters,
             "validation_status": validation.status,
             "validation_errors": validation.errors,
             "validation_ok": validation.ok,

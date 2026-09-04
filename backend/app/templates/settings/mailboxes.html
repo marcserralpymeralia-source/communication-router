@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% set title = "Buzones" %}
+{% block content %}
+<section class="settings-shell">
+  <header class="page-section-header">
+    <div>
+      <span class="page-kicker">Configuración</span>
+      <h1>Buzones</h1>
+      <p class="muted">Gestiona las cuentas de correo que reciben entradas para este tenant.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary compact-button" href="/settings/channels">Canales</a>
+      <a class="button secondary compact-button" href="/settings">Configuración</a>
+    </div>
+  </header>
+
+  <section class="settings-grid">
+    {% for mailbox in mailboxes %}
+      {% set state = mailbox_states.get(mailbox.id) %}
+      <article class="panel drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h3>{{ mailbox.name }}</h3>
+            <p class="muted">{{ mailbox.email_address }}</p>
+          </div>
+          <span class="badge {% if mailbox.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">
+            {{ "Activo" if mailbox.enabled else "Desactivado" }}
+          </span>
+        </div>
+        <div class="settings-kpis">
+          <div><span>Proveedor</span><strong>{{ mailbox.provider }}</strong></div>
+          <div><span>IMAP</span><strong>{{ mailbox.imap_host or "Pendiente" }}</strong></div>
+          <div><span>Sync</span><strong>{{ state.status if state else "Sin estado" }}</strong></div>
+        </div>
+        {% if state and state.last_error_message %}
+          <p class="muted settings-status-note">{{ state.last_error_message }}</p>
+        {% endif %}
+        <div class="drawer-actions">
+          {% if can_test %}
+            <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/test">
+              <button class="secondary compact-button" data-loading-text="Probando...">Probar conexión</button>
+            </form>
+            <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/smtp-test">
+              <button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button>
+            </form>
+            <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/sync">
+              <button class="secondary compact-button" data-loading-text="Encolando...">Sincronizar</button>
+            </form>
+            <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/backfill">
+              <input type="hidden" name="limit" value="100">
+              <button class="secondary compact-button" data-loading-text="Encolando...">Backfill</button>
+            </form>
+          {% endif %}
+          {% if can_edit %}
+            <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/toggle">
+              <button class="secondary compact-button">{{ "Desactivar" if mailbox.enabled else "Activar" }}</button>
+            </form>
+          {% endif %}
+        </div>
+        {% if can_edit %}
+          <details class="drawer-subsection" open>
+            <summary>Editar configuración</summary>
+            <form class="stack" method="post" action="/settings/mailboxes/{{ mailbox.id }}">
+              <div class="form-grid">
+                <label>Nombre visible<input name="name" value="{{ mailbox.name }}"></label>
+                <label>Dirección<input name="email_address" type="email" value="{{ mailbox.email_address }}" required></label>
+                <label>Proveedor
+                  <select name="provider">
+                    <option value="imap" {% if mailbox.provider == "imap" %}selected{% endif %}>IMAP</option>
+                    <option value="gmail" {% if mailbox.provider == "gmail" %}selected{% endif %}>Gmail</option>
+                    <option value="microsoft365" {% if mailbox.provider == "microsoft365" %}selected{% endif %}>Microsoft 365</option>
+                  </select>
+                </label>
+                <label>Usuario IMAP<input name="imap_username" value="{{ mailbox.imap_username or '' }}"></label>
+                <label>Contraseña IMAP<input name="imap_password_encrypted" type="password" placeholder="{{ 'Configurada' if mailbox.imap_password_encrypted else 'Añadir contraseña' }}"></label>
+                <label>Host IMAP<input name="imap_host" value="{{ mailbox.imap_host or '' }}"></label>
+                <label>Puerto IMAP<input name="imap_port" type="number" value="{{ mailbox.imap_port }}"></label>
+                <label>Seguridad
+                  <select name="imap_security">
+                    {% for value, label in [("ssl_tls", "SSL/TLS"), ("starttls", "STARTTLS"), ("none", "Sin cifrado")] %}
+                      <option value="{{ value }}" {% if mailbox.imap_security == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>Carpeta<input name="inbox_folder" value="{{ mailbox.inbox_folder or 'INBOX' }}"></label>
+                <label>Frecuencia (minutos)<input name="polling_frequency_minutes" type="number" min="1" value="{{ mailbox.polling_frequency_minutes }}"></label>
+                <label>Sincronización automática<input type="hidden" name="auto_sync_enabled" value="off"><input name="auto_sync_enabled" type="checkbox" value="on" {% if mailbox.auto_sync_enabled %}checked{% endif %}></label>
+                <label>Leer solo no leídos<input type="hidden" name="read_unread_only" value="off"><input name="read_unread_only" type="checkbox" value="on" {% if mailbox.read_unread_only %}checked{% endif %}></label>
+                <label>Proveedor SMTP
+                  <select name="smtp_provider">
+                    <option value="smtp" {% if mailbox.smtp_provider == "smtp" %}selected{% endif %}>SMTP</option>
+                    <option value="gmail_api" {% if mailbox.smtp_provider == "gmail_api" %}selected{% endif %}>Gmail API</option>
+                    <option value="microsoft_graph" {% if mailbox.smtp_provider == "microsoft_graph" %}selected{% endif %}>Microsoft Graph</option>
+                  </select>
+                </label>
+                <label>Activar envío SMTP<input type="hidden" name="smtp_enabled" value="off"><input name="smtp_enabled" type="checkbox" value="on" {% if mailbox.smtp_enabled %}checked{% endif %}></label>
+                <label>Usuario SMTP<input name="smtp_username" value="{{ mailbox.smtp_username or '' }}"></label>
+                <label>Contraseña SMTP<input name="smtp_password_encrypted" type="password" placeholder="{{ 'Configurada' if mailbox.smtp_password_encrypted else 'Opcional' }}"></label>
+                <label>Host SMTP<input name="smtp_host" value="{{ mailbox.smtp_host or '' }}"></label>
+                <label>Puerto SMTP<input name="smtp_port" type="number" value="{{ mailbox.smtp_port }}"></label>
+                <label>Seguridad SMTP
+                  <select name="smtp_security">
+                    {% for value, label in [("ssl_tls", "SSL/TLS"), ("starttls", "STARTTLS"), ("none", "Sin cifrado")] %}
+                      <option value="{{ value }}" {% if mailbox.smtp_security == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>Remitente<input name="from_email" type="email" value="{{ mailbox.from_email or mailbox.email_address }}"></label>
+                <label>Nombre del remitente<input name="from_name" value="{{ mailbox.from_name or '' }}"></label>
+                <label>Reply-To<input name="reply_to" type="email" value="{{ mailbox.reply_to or '' }}"></label>
+              </div>
+              <div class="drawer-actions">
+                <button data-loading-text="Guardando...">Guardar buzón</button>
+                <button class="secondary" type="submit" formaction="/settings/mailboxes/{{ mailbox.id }}/delete" data-confirm="¿Eliminar este buzón?">Eliminar</button>
+              </div>
+            </form>
+          </details>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </section>
+
+  {% if can_edit %}
+    <section class="panel drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h2>Añadir buzón</h2>
+          <p class="muted">Las credenciales se guardan cifradas con la configuración existente.</p>
+        </div>
+      </div>
+      <form class="stack" method="post" action="/settings/mailboxes">
+        <div class="form-grid">
+          <label>Nombre visible<input name="name" placeholder="Pedidos"></label>
+          <label>Dirección<input name="email_address" type="email" placeholder="info@empresa.com" required></label>
+          <label>Usuario IMAP<input name="imap_username" autocomplete="username"></label>
+          <label>Contraseña IMAP<input name="imap_password_encrypted" type="password" autocomplete="new-password" required></label>
+          <label>Host IMAP<input name="imap_host" placeholder="imap.ejemplo.com" required></label>
+          <label>Puerto IMAP<input name="imap_port" type="number" value="993"></label>
+          <label>Seguridad
+            <select name="imap_security">
+              <option value="ssl_tls">SSL/TLS</option>
+              <option value="starttls">STARTTLS</option>
+              <option value="none">Sin cifrado</option>
+            </select>
+          </label>
+          <label>Carpeta<input name="inbox_folder" value="INBOX"></label>
+        </div>
+        <button data-loading-text="Guardando...">Añadir buzón</button>
+      </form>
+    </section>
+  {% endif %}
+</section>
+{% endblock %}

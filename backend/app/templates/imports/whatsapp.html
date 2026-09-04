@@ -206,8 +206,8 @@
         {% if result %}
           <span class="badge status-confirmed">
             {{ result.classification_type|replace("_", " ")|title if result.classification_type else "Analizado" }}
-            {% if result.classification_confidence is not none %}
-              · {{ (result.classification_confidence * 100)|round(0)|int }}%
+            {% if result.get("classification_confidence") is not none %}
+              · {{ (result.get("classification_confidence") * 100)|round(0)|int }}%
             {% endif %}
           </span>
         {% else %}

@@ -13,6 +13,7 @@ from email import policy
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import EmailMessage
+from email.utils import getaddresses, parseaddr
 from io import BytesIO
 from pathlib import Path
 
@@ -20,9 +21,10 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.agent.prompt_runtime import run_prompt_execution
+from app.communications.service import add_communication_attachment, create_or_update_communication_from_email, mark_communication_processed
 from app.core.encryption import decrypt_secret
-from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
-from app.master.models import EmailSyncState
+from app.db.models import Communication, Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
+from app.master.models import EmailSyncState, MailboxSyncState
 from app.messages.service import (
     NormalizedMessage,
     persist_normalized_message,
@@ -40,7 +42,7 @@ IMAP_INITIAL_HISTORY_MAX = 100
 IMAP_MAX_ATTACHMENTS_PER_EMAIL = 10
 IMAP_MAX_ATTACHMENT_SIZE_MB = 10
 IMAP_TIMEOUT_SECONDS = 20
-SYNC_LOCKS: dict[int, threading.Lock] = {}
+SYNC_LOCKS: dict[tuple[int, int | None], threading.Lock] = {}
 INITIAL_HISTORY_MODES = {"new", "7d", "30d", "100", "custom"}
 
 
@@ -490,8 +492,9 @@ def _imap_uid(fetch_meta: str, fallback: str) -> str:
     return match.group(1) if match else fallback
 
 
-def _normalized_email_external_id(mailbox: str, uidvalidity: str | None, uid: str) -> str:
-    return f"{mailbox}:{uidvalidity or 'unknown'}:{uid}"
+def _normalized_email_external_id(mailbox: str, uidvalidity: str | None, uid: str, mailbox_id: int | None = None) -> str:
+    prefix = f"mailbox:{mailbox_id}:" if mailbox_id is not None else ""
+    return f"{prefix}{mailbox}:{uidvalidity or 'unknown'}:{uid}"
 
 
 def _current_imap_scope(settings: EmailSettings, mailbox: str) -> dict[str, str | None]:
@@ -534,12 +537,20 @@ def _existing_email_for_imap(
     uid: str,
     message_id: str | None,
     external_id: str,
+    mailbox_id: int | None = None,
 ) -> Email | None:
     conditions = [Email.external_id == external_id]
     if message_id:
-        conditions.append(Email.message_id == message_id)
+        conditions.append(
+            and_(Email.message_id == message_id, Email.mailbox_id == mailbox_id)
+            if mailbox_id is not None
+            else Email.message_id == message_id
+        )
     if uidvalidity:
-        conditions.append(and_(Email.imap_mailbox == mailbox, Email.imap_uidvalidity == uidvalidity, Email.imap_uid == uid))
+        uid_conditions = [Email.imap_mailbox == mailbox, Email.imap_uidvalidity == uidvalidity, Email.imap_uid == uid]
+        if mailbox_id is not None:
+            uid_conditions.append(Email.mailbox_id == mailbox_id)
+        conditions.append(and_(*uid_conditions))
     return db.scalar(select(Email).where(Email.company_id == company_id, or_(*conditions)))
 
 
@@ -644,15 +655,16 @@ def _fetch_imap_emails(
     limit: int | None = None,
     auto_process: bool | None = None,
     label: str = "Lectura IMAP",
-    sync_state: EmailSyncState | None = None,
+    sync_state: EmailSyncState | MailboxSyncState | None = None,
     sync_session: Session | None = None,
+    mailbox_id: int | None = None,
     batch_size: int | None = None,
     stop_after_batch: bool = False,
 ) -> dict:
     password = decrypt_secret(settings.imap_password_encrypted)
     if not settings.imap_host or not settings.imap_username or not password:
         return {"ok": False, "found": 0, "saved": 0, "message": "Faltan host, usuario o password IMAP."}
-    sync_lock = SYNC_LOCKS.setdefault(company_id, threading.Lock())
+    sync_lock = SYNC_LOCKS.setdefault((company_id, mailbox_id), threading.Lock())
     if not sync_lock.acquire(blocking=False):
         return {"ok": False, "found": 0, "saved": 0, "message": "Ya hay una sincronizacion IMAP en curso."}
     found = saved = attachments_saved = 0
@@ -810,7 +822,7 @@ def _fetch_imap_emails(
                                 continue
                     msg = message_from_bytes(raw, policy=policy.default)
                     message_id = msg.get("Message-ID") or None
-                    dedupe_external_id = _normalized_email_external_id(mailbox, uidvalidity, uid)
+                    dedupe_external_id = _normalized_email_external_id(mailbox, uidvalidity, uid, mailbox_id)
                     exists = _existing_email_for_imap(
                         db,
                         company_id=company_id,
@@ -819,6 +831,7 @@ def _fetch_imap_emails(
                         uid=uid,
                         message_id=message_id,
                         external_id=dedupe_external_id,
+                        mailbox_id=mailbox_id,
                     )
                     if exists:
                         duplicates += 1
@@ -830,7 +843,10 @@ def _fetch_imap_emails(
                         continue
                     subject = _decode_mime_header(msg.get("Subject", ""))
                     sender = _decode_mime_header(msg.get("From", ""))
+                    # Keep the legacy extraction hook in the IMAP path while
+                    # retaining the original HTML for Communications.
                     body = _extract_body(msg)
+                    body_html = _extract_body_parts(msg)[1]
                     email = Email(
                         company_id=company_id,
                         external_id=dedupe_external_id,
@@ -838,6 +854,7 @@ def _fetch_imap_emails(
                         imap_mailbox=mailbox,
                         imap_uidvalidity=uidvalidity,
                         imap_uid=uid,
+                        mailbox_id=mailbox_id,
                         sender=sender,
                         subject=subject,
                         body=body,
@@ -855,12 +872,41 @@ def _fetch_imap_emails(
                     inbound_message.source_mailbox = mailbox
                     inbound_message.source_uidvalidity = uidvalidity
                     inbound_message.source_uid = uid
+                    inbound_message.mailbox_id = mailbox_id
+                    communication = None
+                    if mailbox_id is not None:
+                        sender_name, sender_email = parseaddr(sender)
+                        communication = create_or_update_communication_from_email(
+                            db,
+                            company_id=company_id,
+                            mailbox_id=mailbox_id,
+                            provider=settings.provider or "imap",
+                            external_message_id=message_id or dedupe_external_id,
+                            thread_id=msg.get("In-Reply-To") or msg.get("References"),
+                            sender_email=sender_email or None,
+                            sender_name=_decode_mime_header(sender_name) or None,
+                            to_recipients=_header_addresses(msg, "To"),
+                            cc_recipients=_header_addresses(msg, "Cc"),
+                            bcc_recipients=_header_addresses(msg, "Bcc"),
+                            subject=subject,
+                            body_text=body,
+                            body_html=body_html,
+                            received_at=email.received_at,
+                            metadata={
+                                "message_id": message_id,
+                                "imap_mailbox": mailbox,
+                                "imap_uidvalidity": uidvalidity,
+                                "imap_uid": uid,
+                            },
+                        )
+                        email.communication_id = communication.id
                     attachment_count = _save_attachments(
                         db,
                         company_id,
                         email,
                         msg,
                         inbound_message=inbound_message,
+                        communication=communication,
                         max_attachments=IMAP_MAX_ATTACHMENTS_PER_EMAIL,
                         max_attachment_size_mb=IMAP_MAX_ATTACHMENT_SIZE_MB,
                     )
@@ -874,6 +920,8 @@ def _fetch_imap_emails(
                     inbound_message.has_attachments = email.has_attachments
                     inbound_message.has_pdf = email.has_pdf
                     inbound_message.original_content = body
+                    if communication:
+                        mark_communication_processed(db, communication)
                     saved += 1
                     saved_email_ids.append(email.id)
                     processed_since_checkpoint += 1
@@ -1095,8 +1143,9 @@ def read_latest_imap_emails(
     auto_process: bool | None = None,
     unread_only: bool | None = None,
     limit: int | None = None,
-    sync_state: EmailSyncState | None = None,
+    sync_state: EmailSyncState | MailboxSyncState | None = None,
     sync_session: Session | None = None,
+    mailbox_id: int | None = None,
 ) -> dict:
     effective_limit = limit if limit is not None else IMAP_RECENT_MESSAGES_LIMIT
     return _fetch_imap_emails(
@@ -1109,6 +1158,7 @@ def read_latest_imap_emails(
         label="Lectura IMAP",
         sync_state=sync_state,
         sync_session=sync_session,
+        mailbox_id=mailbox_id,
     )
 
 
@@ -1125,8 +1175,9 @@ def backfill_imap_emails(
     batch_size: int | None = None,
     resume: bool = False,
     stop_after_batch: bool = False,
-    sync_state: EmailSyncState | None = None,
+    sync_state: EmailSyncState | MailboxSyncState | None = None,
     sync_session: Session | None = None,
+    mailbox_id: int | None = None,
 ) -> dict:
     start_date = _parse_imap_date(from_date or settings.read_from_date)
     if not start_date:
@@ -1152,6 +1203,7 @@ def backfill_imap_emails(
         label=f"Backfill IMAP desde {start_date.strftime('%d/%m/%Y')}{' hasta ' + end_date.strftime('%d/%m/%Y') if end_date else ''}",
         sync_state=sync_state,
         sync_session=sync_session,
+        mailbox_id=mailbox_id,
         batch_size=batch_size,
         stop_after_batch=stop_after_batch,
     )
@@ -1173,7 +1225,7 @@ def _decode_mime_header(value: str) -> str:
         return value or ""
 
 
-def _extract_body(msg: EmailMessage) -> str:
+def _extract_body_parts(msg: EmailMessage) -> tuple[str, str | None]:
     if msg.is_multipart():
         plain_parts: list[str] = []
         html_parts: list[str] = []
@@ -1190,10 +1242,28 @@ def _extract_body(msg: EmailMessage) -> str:
             if content_type == "text/plain":
                 plain_parts.append(text)
             else:
-                html_parts.append(_strip_html(text))
-        return "\n\n".join(plain_parts or html_parts).strip()
+                html_parts.append(text)
+        body_html = "\n\n".join(html_parts).strip() or None
+        return "\n\n".join(plain_parts).strip() or _strip_html(body_html or ""), body_html
     payload = msg.get_payload(decode=True)
-    return payload.decode(msg.get_content_charset() or "utf-8", errors="ignore").strip() if payload else ""
+    if not payload:
+        return "", None
+    text = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore").strip()
+    if msg.get_content_type() == "text/html":
+        return _strip_html(text), text
+    return text, None
+
+
+def _extract_body(msg: EmailMessage) -> str:
+    return _extract_body_parts(msg)[0]
+
+
+def _header_addresses(msg: EmailMessage, header: str) -> list[str]:
+    addresses: list[str] = []
+    for name, address in getaddresses(msg.get_all(header, [])):
+        if address.strip():
+            addresses.append(address.strip())
+    return addresses
 
 
 def _strip_html(text: str) -> str:
@@ -1274,6 +1344,7 @@ def _save_attachments(
     email: Email,
     msg: EmailMessage,
     inbound_message: InboundMessage | None = None,
+    communication: Communication | None = None,
     *,
     max_attachments: int = IMAP_MAX_ATTACHMENTS_PER_EMAIL,
     max_attachment_size_mb: int = IMAP_MAX_ATTACHMENT_SIZE_MB,
@@ -1341,6 +1412,16 @@ def _save_attachments(
                 message_attachment.extracted_text = attachment.extracted_text
                 message_attachment.extraction_status = attachment.extraction_status
                 message_attachment.extraction_error = attachment.extraction_error
+        if communication:
+            add_communication_attachment(
+                db,
+                communication,
+                filename=filename,
+                mime_type=content_type,
+                payload=payload,
+                storage_ref=storage_path,
+                metadata={"content_disposition": part.get_content_disposition()},
+            )
         count += 1
     return count
 

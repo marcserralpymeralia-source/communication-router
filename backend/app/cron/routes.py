@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.channels.service import is_channel_enabled
 from app.core.config import get_settings
-from app.db.models import EmailSettings
+from app.db.models import EmailSettings, Mailbox
 from app.master.database import get_master_db
-from app.master.models import EmailSyncState, MasterTenantDatabase
+from app.master.models import EmailSyncState, MailboxSyncState, MasterTenantDatabase
+from app.mailboxes.service import sync_state_from_mailbox
 from app.settings.integrations import read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import tenant_db_session
@@ -139,6 +140,77 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             _release_lock(master_db, state, success=False, error=str(exc))
             result["errors"] += 1
             result["tenants"].append({"company_id": tenant.company_id, "ok": False, "message": str(exc)})
+        finally:
+            db.close()
+    due_mailbox_states = master_db.scalars(
+        select(MailboxSyncState)
+        .join(MasterTenantDatabase, MasterTenantDatabase.company_id == MailboxSyncState.company_id)
+        .where(
+            MasterTenantDatabase.is_active.is_(True),
+            MasterTenantDatabase.database_url.is_not(None),
+            MailboxSyncState.enabled.is_(True),
+            MailboxSyncState.next_run_at.is_not(None),
+            MailboxSyncState.next_run_at <= now,
+        )
+    ).all()
+    result["checked"] += len(due_mailbox_states)
+    for state in due_mailbox_states:
+        tenant = master_db.scalar(
+            select(MasterTenantDatabase).where(
+                MasterTenantDatabase.company_id == state.company_id,
+                MasterTenantDatabase.is_active.is_(True),
+            )
+        )
+        if not tenant or not tenant.database_url or not _acquire_lock(master_db, state, owner="cron-mailbox-sync"):
+            result["skipped"] += 1
+            continue
+        session_factory = tenant_db_session(tenant.database_url)
+        db = session_factory()
+        try:
+            mailbox = db.get(Mailbox, state.mailbox_id)
+            if not mailbox or mailbox.company_id != tenant.company_id or not mailbox.enabled:
+                state.enabled = False
+                _release_lock(master_db, state, success=True)
+                result["skipped"] += 1
+                continue
+            sync_state_from_mailbox(state, mailbox)
+            master_db.commit()
+            if not is_channel_enabled(db, tenant.company_id, "email") or not mailbox.auto_sync_enabled:
+                state.enabled = False
+                _release_lock(master_db, state, success=True)
+                result["skipped"] += 1
+                continue
+            sync_result = read_latest_imap_emails(
+                db,
+                mailbox,
+                tenant.company_id,
+                auto_process=mailbox.auto_process_on_fetch,
+                unread_only=mailbox.read_unread_only,
+                limit=max(min(int(mailbox.read_limit or 10), 50), 1),
+                sync_state=state,
+                sync_session=master_db,
+                mailbox_id=mailbox.id,
+            )
+            tenant_result = {
+                "company_id": tenant.company_id,
+                "mailbox_id": mailbox.id,
+                "ok": bool(sync_result.get("ok")),
+                "found": int(sync_result.get("found") or 0),
+                "saved": int(sync_result.get("saved") or 0),
+                "duplicates": int(sync_result.get("duplicates") or 0),
+                "discarded": int(sync_result.get("discarded") or 0),
+                "errors": int(sync_result.get("errors") or 0),
+                "message": sync_result.get("message"),
+            }
+            result["processed"] += 1
+            for key in ("found", "saved", "duplicates", "discarded", "errors"):
+                result[key] += tenant_result[key]
+            result["tenants"].append(tenant_result)
+            _release_lock(master_db, state, success=bool(sync_result.get("ok")), error=None if sync_result.get("ok") else str(sync_result.get("message") or "error"))
+        except Exception as exc:  # noqa: BLE001
+            _release_lock(master_db, state, success=False, error=str(exc))
+            result["errors"] += 1
+            result["tenants"].append({"company_id": tenant.company_id, "mailbox_id": state.mailbox_id, "ok": False, "message": str(exc)})
         finally:
             db.close()
     master_db.commit()

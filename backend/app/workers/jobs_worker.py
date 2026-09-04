@@ -22,18 +22,19 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Mailbox, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
 import app.master.database as master_database
 from app.master.database import MasterSessionLocal
-from app.master.models import EmailSyncState, MasterTenantDatabase
+from app.master.models import EmailSyncState, MailboxSyncState, MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.knowledge.service import index_knowledge_entries
 from app.orders.service import _customer_label, _sync_customer_product_knowledge, validate_confirmation
 from app.semantic_retrieval.products import index_products
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
+from app.mailboxes.service import get_or_create_mailbox_sync_state
 from app.settings.service import get_or_create_settings
 from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
 from app.tenancy.migrations import tenant_migration_report
@@ -98,6 +99,42 @@ def _is_retryable_exception(exc: Exception) -> bool:
     )
 
 
+def _email_job_context(db, master_db, company_id: int, payload: dict):  # noqa: ANN001
+    raw_mailbox_id = payload.get("mailbox_id")
+    if raw_mailbox_id not in (None, ""):
+        try:
+            mailbox_id = int(raw_mailbox_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("El buzón solicitado no es válido.") from exc
+        mailbox = db.get(Mailbox, mailbox_id)
+        if not mailbox or mailbox.company_id != company_id:
+            raise RuntimeError("No se encontró el buzón solicitado.")
+        if not mailbox.enabled:
+            raise RuntimeError("El buzón solicitado está desactivado.")
+        state = get_or_create_mailbox_sync_state(master_db, mailbox)
+        return mailbox, state, mailbox_id
+
+    settings = get_or_create_settings(db, EmailSettings, company_id)
+    sync_state = master_db.scalar(
+        select(EmailSyncState).where(
+            EmailSyncState.company_id == company_id,
+            EmailSyncState.channel_key == "email",
+        )
+    )
+    if not sync_state:
+        sync_state = EmailSyncState(
+            company_id=company_id,
+            channel_key="email",
+            enabled=True,
+            frequency_seconds=60,
+            status="idle",
+            next_run_at=_now(),
+        )
+        master_db.add(sync_state)
+        master_db.commit()
+    return settings, sync_state, None
+
+
 def _process_job(db, job: BackgroundJob) -> dict:
     payload = job_payload(job)
     if job.job_type in {"import_confirm", "import_file"}:
@@ -117,26 +154,9 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 "skipped": True,
                 "message": "Canal Email desactivado para este tenant",
             }
-        settings = get_or_create_settings(db, EmailSettings, job.company_id)
         master_db = MasterSessionLocal()
         try:
-            sync_state = master_db.scalar(
-                select(EmailSyncState).where(
-                    EmailSyncState.company_id == job.company_id,
-                    EmailSyncState.channel_key == "email",
-                )
-            )
-            if not sync_state:
-                sync_state = EmailSyncState(
-                    company_id=job.company_id,
-                    channel_key="email",
-                    enabled=True,
-                    frequency_seconds=60,
-                    status="idle",
-                    next_run_at=_now(),
-                )
-                master_db.add(sync_state)
-                master_db.commit()
+            settings, sync_state, mailbox_id = _email_job_context(db, master_db, job.company_id, payload)
             return read_latest_imap_emails(
                 db,
                 settings,
@@ -146,6 +166,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 limit=payload.get("limit"),
                 sync_state=sync_state,
                 sync_session=master_db,
+                mailbox_id=mailbox_id,
             )
         finally:
             master_db.close()
@@ -156,27 +177,10 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 "skipped": True,
                 "message": "Canal Email desactivado para este tenant",
             }
-        settings = get_or_create_settings(db, EmailSettings, job.company_id)
         limit = max(min(int(payload.get("limit", 3) or 3), 10), 1)
         master_db = MasterSessionLocal()
         try:
-            sync_state = master_db.scalar(
-                select(EmailSyncState).where(
-                    EmailSyncState.company_id == job.company_id,
-                    EmailSyncState.channel_key == "email",
-                )
-            )
-            if not sync_state:
-                sync_state = EmailSyncState(
-                    company_id=job.company_id,
-                    channel_key="email",
-                    enabled=True,
-                    frequency_seconds=60,
-                    status="idle",
-                    next_run_at=_now(),
-                )
-                master_db.add(sync_state)
-                master_db.commit()
+            settings, sync_state, mailbox_id = _email_job_context(db, master_db, job.company_id, payload)
             return read_latest_imap_emails(
                 db,
                 settings,
@@ -186,6 +190,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 limit=limit,
                 sync_state=sync_state,
                 sync_session=master_db,
+                mailbox_id=mailbox_id,
             )
         finally:
             master_db.close()
@@ -196,26 +201,9 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 "skipped": True,
                 "message": "Canal Email desactivado para este tenant",
             }
-        settings = get_or_create_settings(db, EmailSettings, job.company_id)
         master_db = MasterSessionLocal()
         try:
-            sync_state = master_db.scalar(
-                select(EmailSyncState).where(
-                    EmailSyncState.company_id == job.company_id,
-                    EmailSyncState.channel_key == "email",
-                )
-            )
-            if not sync_state:
-                sync_state = EmailSyncState(
-                    company_id=job.company_id,
-                    channel_key="email",
-                    enabled=True,
-                    frequency_seconds=60,
-                    status="idle",
-                    next_run_at=_now(),
-                )
-                master_db.add(sync_state)
-                master_db.commit()
+            settings, sync_state, mailbox_id = _email_job_context(db, master_db, job.company_id, payload)
             requested_limit = max(int(payload.get("limit") or 1), 1)
 
             result = backfill_imap_emails(
@@ -232,6 +220,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 stop_after_batch=True,
                 sync_state=sync_state,
                 sync_session=master_db,
+                mailbox_id=mailbox_id,
             )
 
             consumed = max(int(result.get("batch_count") or 0), 0)
@@ -255,6 +244,8 @@ def _process_job(db, job: BackgroundJob) -> dict:
                     "total_found": total_found,
                     "processed_count": processed_count,
                 }
+                if payload.get("mailbox_id") is not None:
+                    continuation_payload["mailbox_id"] = payload["mailbox_id"]
                 if payload.get("to_uid"):
                     continuation_payload["to_uid"] = payload.get("to_uid")
 

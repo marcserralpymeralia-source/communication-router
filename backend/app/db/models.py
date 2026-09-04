@@ -1,7 +1,21 @@
+import re
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
 from app.db.database import Base
@@ -9,6 +23,20 @@ from app.db.database import Base
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_DESTINATION_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _normalize_destination_email(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if not _DESTINATION_EMAIL_RE.fullmatch(normalized):
+        raise ValueError("destination_email must be a valid email address")
+    return normalized
 
 
 class Company(Base):
@@ -62,6 +90,8 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     role: Mapped[Role] = relationship()
+
+    __table_args__ = (UniqueConstraint("company_id", "id"),)
 
 
 class Setting(Base):
@@ -199,6 +229,367 @@ class EmailSettings(Base):
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Mailbox(Base):
+    __tablename__ = "mailboxes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(150), default="Buzón de correo")
+    email_address: Mapped[str] = mapped_column(String(255))
+    provider: Mapped[str] = mapped_column(String(50), default="imap")
+    connection_method: Mapped[str] = mapped_column(String(50), default="password")
+    client_id: Mapped[str | None] = mapped_column(String(255))
+    client_secret_encrypted: Mapped[str | None] = mapped_column(Text)
+    tenant_id: Mapped[str | None] = mapped_column(String(255))
+    redirect_uri: Mapped[str | None] = mapped_column(String(500))
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    connected_email: Mapped[str | None] = mapped_column(String(255))
+    imap_host: Mapped[str | None] = mapped_column(String(255))
+    imap_port: Mapped[int] = mapped_column(Integer, default=993)
+    imap_use_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
+    imap_security: Mapped[str] = mapped_column(String(30), default="ssl_tls")
+    imap_username: Mapped[str | None] = mapped_column(String(255))
+    imap_password_encrypted: Mapped[str | None] = mapped_column(Text)
+    mailbox: Mapped[str | None] = mapped_column(String(255))
+    inbox_folder: Mapped[str] = mapped_column(String(100), default="INBOX")
+    processed_folder: Mapped[str | None] = mapped_column(String(100))
+    error_folder: Mapped[str | None] = mapped_column(String(100))
+    no_order_folder: Mapped[str | None] = mapped_column(String(100))
+    doubtful_folder: Mapped[str | None] = mapped_column(String(100))
+    read_limit: Mapped[int] = mapped_column(Integer, default=25)
+    polling_frequency_minutes: Mapped[int] = mapped_column(Integer, default=5)
+    auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    read_unread_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    read_from_date: Mapped[str | None] = mapped_column(String(50))
+    mark_as_read_after_import: Mapped[bool] = mapped_column(Boolean, default=False)
+    move_after_processing: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_process_on_fetch: Mapped[bool] = mapped_column(Boolean, default=False)
+    smtp_provider: Mapped[str] = mapped_column(String(50), default="smtp")
+    smtp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    smtp_host: Mapped[str | None] = mapped_column(String(255))
+    smtp_port: Mapped[int] = mapped_column(Integer, default=587)
+    smtp_security: Mapped[str] = mapped_column(String(30), default="starttls")
+    smtp_username: Mapped[str | None] = mapped_column(String(255))
+    smtp_password_encrypted: Mapped[str | None] = mapped_column(Text)
+    from_email: Mapped[str | None] = mapped_column(String(255))
+    from_name: Mapped[str | None] = mapped_column(String(255))
+    reply_to: Mapped[str | None] = mapped_column(String(255))
+    default_cc: Mapped[str | None] = mapped_column(Text)
+    default_bcc: Mapped[str | None] = mapped_column(Text)
+    save_internal_copy: Mapped[bool] = mapped_column(Boolean, default=True)
+    preserve_thread_headers: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_imap_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_imap_test_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_imap_test_message: Mapped[str | None] = mapped_column(Text)
+    last_smtp_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_smtp_test_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_smtp_test_message: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "email_address"),)
+
+
+class Communication(Base):
+    __tablename__ = "communications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
+    external_message_id: Mapped[str] = mapped_column(String(255))
+    thread_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    provider: Mapped[str] = mapped_column(String(50), default="imap")
+    sender_email: Mapped[str | None] = mapped_column(String(255), index=True)
+    sender_name: Mapped[str | None] = mapped_column(String(255))
+    to_recipients: Mapped[str | None] = mapped_column(Text)
+    cc_recipients: Mapped[str | None] = mapped_column(Text)
+    bcc_recipients: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(String(500))
+    body_text: Mapped[str | None] = mapped_column(Text)
+    body_html: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    processing_status: Mapped[str] = mapped_column(String(50), default="received", index=True)
+    routing_status: Mapped[str] = mapped_column(String(50), default="unclassified", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    attachments: Mapped[list["CommunicationAttachment"]] = relationship(
+        back_populates="communication", cascade="all, delete-orphan"
+    )
+    routing_decisions: Mapped[list["RoutingDecision"]] = relationship(
+        back_populates="communication", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "mailbox_id", "provider", "external_message_id"),
+        UniqueConstraint("company_id", "id"),
+    )
+
+
+class CommunicationAttachment(Base):
+    __tablename__ = "communication_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    communication_id: Mapped[int] = mapped_column(ForeignKey("communications.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str | None] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    storage_ref: Mapped[str | None] = mapped_column(String(500))
+    extracted_text: Mapped[str | None] = mapped_column(Text)
+    extraction_status: Mapped[str] = mapped_column(String(80), default="pending")
+    extraction_error: Mapped[str | None] = mapped_column(Text)
+    checksum: Mapped[str | None] = mapped_column(String(64), index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    communication: Mapped[Communication] = relationship(back_populates="attachments")
+
+
+class Department(Base):
+    __tablename__ = "departments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(150))
+    description: Mapped[str | None] = mapped_column(Text)
+    destination_email: Mapped[str | None] = mapped_column(String(255))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    knowledge_items: Mapped[list["DepartmentKnowledge"]] = relationship(
+        back_populates="department", passive_deletes=True
+    )
+    members: Mapped[list["DepartmentMember"]] = relationship(
+        back_populates="department", passive_deletes=True
+    )
+    raci_assignments: Mapped[list["RaciAssignment"]] = relationship(
+        back_populates="department", passive_deletes=True
+    )
+
+    __table_args__ = (UniqueConstraint("company_id", "name"), UniqueConstraint("company_id", "id"))
+
+    @validates("destination_email")
+    def validate_destination_email(self, _key: str, value: str | None) -> str | None:
+        return _normalize_destination_email(value)
+
+
+class DepartmentKnowledge(Base):
+    __tablename__ = "department_knowledge"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id", ondelete="RESTRICT"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    knowledge_type: Mapped[str] = mapped_column(String(30), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    department: Mapped[Department] = relationship(back_populates="knowledge_items")
+
+    __table_args__ = (
+        CheckConstraint(
+            "knowledge_type IN ('responsibility', 'exclusion', 'example', 'exception', 'guideline')",
+            name="ck_department_knowledge_type",
+        ),
+        UniqueConstraint("department_id", "title", "knowledge_type"),
+    )
+
+
+class DepartmentMember(Base):
+    __tablename__ = "department_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    department_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    role: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    department: Mapped[Department] = relationship(back_populates="members")
+    user: Mapped[User] = relationship(overlaps="department,members")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_department_member_department_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "user_id"),
+            ("users.company_id", "users.id"),
+            name="fk_department_member_user_company",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("company_id", "department_id", "user_id"),
+    )
+
+
+class RaciAssignment(Base):
+    __tablename__ = "raci_assignments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    department_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    scope: Mapped[str] = mapped_column(String(150), default="department")
+    raci_role: Mapped[str] = mapped_column(String(15), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    department: Mapped[Department] = relationship(
+        back_populates="raci_assignments", foreign_keys=[company_id, department_id]
+    )
+    user: Mapped[User | None] = relationship(
+        foreign_keys=[company_id, user_id], overlaps="department,raci_assignments"
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_raci_department_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "user_id"),
+            ("users.company_id", "users.id"),
+            name="fk_raci_user_company",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "raci_role IN ('responsible', 'accountable', 'consulted', 'informed')",
+            name="ck_raci_assignment_role",
+        ),
+        UniqueConstraint("company_id", "department_id", "user_id", "scope", "raci_role"),
+    )
+
+    __table_args__ += (
+        Index(
+            "uq_raci_assignments_null_user",
+            "company_id",
+            "department_id",
+            "scope",
+            "raci_role",
+            unique=True,
+            sqlite_where=text("user_id IS NULL"),
+            postgresql_where=text("user_id IS NULL"),
+        ),
+    )
+
+
+class RoutingDecision(Base):
+    __tablename__ = "routing_decisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    communication_id: Mapped[int] = mapped_column(Integer, index=True)
+    department_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    alternative_department_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    final_department_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    category: Mapped[str] = mapped_column(String(100))
+    final_category: Mapped[str | None] = mapped_column(String(100))
+    confidence: Mapped[float] = mapped_column(Float)
+    requires_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    reason: Mapped[str] = mapped_column(Text)
+    ambiguity_reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="pending_review", index=True)
+    source: Mapped[str] = mapped_column(String(30), default="agent")
+    analysis_number: Mapped[int] = mapped_column(Integer, default=1)
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    communication: Mapped[Communication] = relationship(back_populates="routing_decisions")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "communication_id"),
+            ("communications.company_id", "communications.id"),
+            name="fk_routing_decision_communication_company",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_routing_decision_department_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "alternative_department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_routing_decision_alternative_department_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "final_department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_routing_decision_final_department_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "reviewed_by_user_id"),
+            ("users.company_id", "users.id"),
+            name="fk_routing_decision_reviewer_company",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("company_id", "communication_id", "analysis_number"),
+    )
+
+
+class RoutingCorrection(Base):
+    __tablename__ = "routing_corrections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    routing_decision_id: Mapped[int] = mapped_column(Integer, index=True)
+    communication_id: Mapped[int] = mapped_column(Integer, index=True)
+    original_department_id: Mapped[int | None] = mapped_column(Integer)
+    corrected_department_id: Mapped[int] = mapped_column(Integer)
+    original_category: Mapped[str | None] = mapped_column(String(100))
+    corrected_category: Mapped[str | None] = mapped_column(String(100))
+    reason: Mapped[str] = mapped_column(Text)
+    corrected_by_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "routing_decision_id"),
+            ("routing_decisions.company_id", "routing_decisions.id"),
+            name="fk_routing_correction_decision_company",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "communication_id"),
+            ("communications.company_id", "communications.id"),
+            name="fk_routing_correction_communication_company",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "corrected_department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_routing_correction_department_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "corrected_by_user_id"),
+            ("users.company_id", "users.id"),
+            name="fk_routing_correction_user_company",
+            ondelete="RESTRICT",
+        ),
+    )
 
 
 class EmailTemplate(Base):
@@ -648,6 +1039,7 @@ class InboundMessage(Base):
     source_mailbox: Mapped[str | None] = mapped_column(String(255), index=True)
     source_uidvalidity: Mapped[str | None] = mapped_column(String(120), index=True)
     source_uid: Mapped[str | None] = mapped_column(String(120), index=True)
+    mailbox_id: Mapped[int | None] = mapped_column(Integer, index=True)
     direction: Mapped[str] = mapped_column(String(30), default="inbound")
     sender: Mapped[str | None] = mapped_column(String(255))
     recipient: Mapped[str | None] = mapped_column(String(255))
@@ -924,6 +1316,8 @@ class Email(Base):
     imap_mailbox: Mapped[str | None] = mapped_column(String(255), index=True)
     imap_uidvalidity: Mapped[str | None] = mapped_column(String(120), index=True)
     imap_uid: Mapped[str | None] = mapped_column(String(120), index=True)
+    mailbox_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    communication_id: Mapped[int | None] = mapped_column(ForeignKey("communications.id"), index=True)
     sender: Mapped[str] = mapped_column(String(255))
     subject: Mapped[str] = mapped_column(String(500))
     body: Mapped[str | None] = mapped_column(Text)
@@ -942,6 +1336,7 @@ class Email(Base):
     last_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     conversation: Mapped[Conversation | None] = relationship()
+    communication: Mapped[Communication | None] = relationship()
     attachments: Mapped[list["EmailAttachment"]] = relationship(cascade="all, delete-orphan")
 
 

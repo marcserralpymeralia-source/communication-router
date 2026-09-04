@@ -19,6 +19,9 @@ from app.products.routes import router as products_router
 from app.whatsapp.routes import router as whatsapp_router
 from app.whatsapp.inbox_routes import router as whatsapp_inbox_router
 from app.settings.channels_routes import router as channels_settings_router
+from app.mailboxes.routes import router as mailboxes_router
+from app.communications.routes import router as communications_router
+from app.departments.routes import router as departments_router
 from app.settings.routes import router as settings_router
 from app.setup.routes import router as setup_router
 from app.users.routes import router as users_router
@@ -50,6 +53,9 @@ def get_registered_routers() -> list:
         alerts_router,
         learning_router,
         channels_settings_router,
+        mailboxes_router,
+        communications_router,
+        departments_router,
         setup_router,
         orders_router,
         databases_router,

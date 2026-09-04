@@ -211,7 +211,13 @@ def list_orders(
 
     # Calculate status_counts for the status tabs based on base filters (without status)
     base_filters = {k: v for k, v in filters.items() if k not in {"status", "order_status", "page"}}
-    base_order_view = load_order_view_data(db, user.company_id, base_filters)
+    # Without a status filter the first view already contains the complete
+    # filtered dataset; reuse it instead of issuing the same batch queries.
+    base_order_view = (
+        load_order_view_data(db, user.company_id, base_filters)
+        if filters.get("status") or filters.get("order_status")
+        else order_view
+    )
     statuses = base_order_view["statuses"]
     all_unfiltered_orders = base_order_view["all_orders"]
     status_counts = {"all": len(all_unfiltered_orders)}

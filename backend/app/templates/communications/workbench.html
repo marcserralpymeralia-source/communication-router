@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-section stack">
+  <div class="section-title-row">
+    <div>
+      <p class="eyebrow">Workbench</p>
+      <h2>Comunicaciones</h2>
+      <p class="muted">Analiza, revisa y confirma el destino de cada comunicación.</p>
+    </div>
+    <a class="button secondary" href="/communications">Vista API</a>
+  </div>
+
+  <div class="summary-grid">
+    {% for key, label in [("all", "Todas"), ("unclassified", "Sin analizar"), ("pending_review", "Pendientes"), ("routed", "Resueltas")] %}
+      <a class="subpanel" href="/communications/workbench?status={{ key }}">
+        <span class="muted">{{ label }}</span>
+        <strong>{{ counts[key] }}</strong>
+      </a>
+    {% endfor %}
+  </div>
+
+  <div class="subpanel table-wrap">
+    <table>
+      <thead><tr><th>Fecha</th><th>Remitente</th><th>Asunto</th><th>Estado</th><th></th></tr></thead>
+      <tbody>
+        {% for item in items %}
+          <tr>
+            <td>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if item.received_at else "Sin fecha" }}</td>
+            <td>{{ item.sender_name or item.sender_email or "Sin remitente" }}</td>
+            <td><strong>{{ item.subject or "Sin asunto" }}</strong></td>
+            <td><span class="badge">{{ item.routing_status }}</span></td>
+            <td><a class="button secondary compact-button" href="/communications/workbench/{{ item.id }}">Abrir</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="muted">No hay comunicaciones en este estado.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_arrow_right, icon_plus, icon_trash %}
+{% set title = "Departamentos" %}
+{% block content %}
+<section class="settings-shell">
+  <header class="page-section-header">
+    <div>
+      <p class="eyebrow">Estructura organizativa</p>
+      <h2>Departamentos</h2>
+      <p class="muted">Define quién debe recibir cada tipo de comunicación y qué conocimiento utilizará el agente.</p>
+    </div>
+  </header>
+
+  {% if message %}<div class="alert success">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+  {% if can_edit %}
+    <section class="panel stack">
+      <div class="section-title-row">
+        <div>
+          <h3>Crear departamento</h3>
+          <p class="muted">Empieza por el nombre, el propósito y el destino de sus comunicaciones.</p>
+        </div>
+        <span class="badge">Configuración</span>
+      </div>
+      <form class="form-grid js-loading-form" method="post" action="/departments">
+        <label>Nombre<input name="name" required placeholder="Logística"></label>
+        <label>Correo de destino<input name="destination_email" type="email" placeholder="logistica@empresa.com"></label>
+        <label class="span-2">Descripción<textarea name="description" rows="2" placeholder="Gestiona transporte, expediciones e incidencias de entrega."></textarea></label>
+        <label class="checkbox-label"><input name="active" type="checkbox" checked> Activo</label>
+        <div><button type="submit">{{ icon_plus(14) }} Crear departamento</button></div>
+      </form>
+    </section>
+  {% endif %}
+
+  <section class="panel stack">
+    <div class="section-title-row">
+      <div>
+        <h3>Departamentos configurados</h3>
+        <p class="muted">La información está aislada dentro del tenant actual.</p>
+      </div>
+      <span class="badge">{{ departments|length }}</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Nombre</th><th>Descripción</th><th>Destino</th><th>Estado</th><th>Conocimiento</th><th>Miembros</th><th>Acciones</th></tr></thead>
+        <tbody>
+        {% for item in department_items %}
+          <tr>
+            <td><strong>{{ item.name }}</strong></td>
+            <td class="cell-ellipsis" title="{{ item.description or '' }}">{{ (item.description or "Sin descripción")[:110] }}</td>
+            <td>{{ item.destination_email or "Sin configurar" }}</td>
+            <td><span class="badge {% if item.active %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activo" if item.active else "Inactivo" }}</span></td>
+            <td>{{ item.knowledge_count }}</td>
+            <td>{{ item.member_count }}</td>
+            <td>
+              <div class="stack-inline">
+                <a class="button secondary compact-button" href="/departments/{{ item.id }}">{{ icon_arrow_right(14) }} Abrir</a>
+                {% if can_edit %}
+                  <form method="post" action="/departments/{{ item.id }}/toggle" class="js-loading-form"><button class="button secondary compact-button" type="submit">{{ "Desactivar" if item.active else "Activar" }}</button></form>
+                  <form method="post" action="/departments/{{ item.id }}/delete" class="js-loading-form" data-confirm="¿Borrar este departamento? Solo se permite si no tiene dependencias."><button class="button danger-soft compact-button" type="submit" title="Borrar departamento" aria-label="Borrar departamento">{{ icon_trash(14) }}</button></form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted">Todavía no hay departamentos configurados.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+{% endblock %}

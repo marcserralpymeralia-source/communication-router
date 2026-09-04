@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_arrow_left, icon_edit, icon_plus, icon_trash %}
+{% set title = "Departamento · " ~ department.name %}
+{% macro type_label(value) -%}
+  {% for key, label in knowledge_types %}{% if key == value %}{{ label }}{% endif %}{% endfor %}
+{%- endmacro %}
+{% macro role_label(value) -%}
+  {% for key, label in raci_roles %}{% if key == value %}{{ label }}{% endif %}{% endfor %}
+{%- endmacro %}
+{% block content %}
+<section class="settings-shell">
+  <header class="page-section-header">
+    <div>
+      <a class="button secondary compact-button" href="/departments">{{ icon_arrow_left(14) }} Departamentos</a>
+      <h2>{{ department.name }}</h2>
+      <p class="muted">Configura el conocimiento semántico, las personas y la responsabilidad de este departamento.</p>
+    </div>
+    <span class="badge {% if department.active %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activo" if department.active else "Inactivo" }}</span>
+  </header>
+
+  {% if message %}<div class="alert success">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+  <section class="panel stack">
+    <div class="section-title-row"><div><h3>General</h3><p class="muted">Datos básicos y destino de las comunicaciones del departamento.</p></div><span class="badge">{{ "Activo" if department.active else "Inactivo" }}</span></div>
+    {% if can_edit %}
+      <form class="form-grid js-loading-form" method="post" action="/departments/{{ department.id }}">
+        <label>Nombre<input name="name" value="{{ department.name }}" required></label>
+        <label>Correo de destino<input name="destination_email" type="email" value="{{ department.destination_email or '' }}" placeholder="logistica@empresa.com"></label>
+        <label class="span-2">Descripción<textarea name="description" rows="3">{{ department.description or '' }}</textarea></label>
+        <label class="checkbox-label"><input name="active" type="checkbox" {% if department.active %}checked{% endif %}> Activo</label>
+        <div><button type="submit">{{ icon_edit(14) }} Guardar cambios</button></div>
+      </form>
+    {% else %}
+      <p><strong>Descripción:</strong> {{ department.description or "Sin descripción" }}</p>
+      <p><strong>Destino:</strong> {{ department.destination_email or "Sin configurar" }}</p>
+    {% endif %}
+  </section>
+
+  <section class="panel stack">
+    <div class="section-title-row"><div><h3>Conocimiento</h3><p class="muted">Describe con lenguaje natural qué gestiona el departamento y cuándo debe excluirse. Este conocimiento será semántico para el agente.</p></div><span class="badge">{{ knowledge|length }}</span></div>
+    {% if can_edit %}
+      <form class="form-grid js-loading-form" method="post" action="/departments/{{ department.id }}/knowledge">
+        <label>Tipo<select name="knowledge_type" required>{% for key, label in knowledge_types %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+        <label>Título<input name="title" required placeholder="Incidencias de entrega"></label>
+        <label class="span-2">Contenido<textarea name="content" rows="3" required placeholder="El cliente indica que la mercancía prevista para ayer todavía no ha llegado."></textarea></label>
+        <label class="checkbox-label"><input name="active" type="checkbox" checked> Activo</label>
+        <div><button type="submit">{{ icon_plus(14) }} Añadir conocimiento</button></div>
+      </form>
+    {% endif %}
+    <div class="stack">
+      {% for item in knowledge %}
+        <article class="drawer-card">
+          {% if can_edit %}
+            <form class="stack js-loading-form" method="post" action="/departments/{{ department.id }}/knowledge/{{ item.id }}">
+              <div class="section-title-row"><strong>{{ type_label(item.knowledge_type) }}</strong><span class="badge {% if item.active %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activo" if item.active else "Inactivo" }}</span></div>
+              <label>Título<input name="title" value="{{ item.title }}" required></label>
+              <label>Contenido<textarea name="content" rows="3" required>{{ item.content }}</textarea></label>
+              <div class="form-grid"><label>Tipo<select name="knowledge_type">{% for key, label in knowledge_types %}<option value="{{ key }}" {% if key == item.knowledge_type %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><label class="checkbox-label"><input name="active" type="checkbox" {% if item.active %}checked{% endif %}> Activo</label></div>
+              <div class="stack-inline"><button class="button secondary compact-button" type="submit">{{ icon_edit(14) }} Guardar</button></form>
+              <form method="post" action="/departments/{{ department.id }}/knowledge/{{ item.id }}/toggle" class="js-loading-form"><button class="button secondary compact-button" type="submit">{{ "Desactivar" if item.active else "Activar" }}</button></form>
+              <form method="post" action="/departments/{{ department.id }}/knowledge/{{ item.id }}/delete" class="js-loading-form" data-confirm="¿Eliminar este conocimiento?"><button class="button danger-soft compact-button" type="submit">{{ icon_trash(14) }} Eliminar</button></form></div>
+          {% else %}
+            <strong>{{ type_label(item.knowledge_type) }} · {{ item.title }}</strong><p>{{ item.content }}</p>
+          {% endif %}
+        </article>
+      {% else %}<p class="muted">Aún no hay conocimiento semántico definido.</p>{% endfor %}
+    </div>
+  </section>
+
+  <section class="panel stack">
+    <div class="section-title-row"><div><h3>Miembros</h3><p class="muted">Usuarios del tenant vinculados a este departamento.</p></div><span class="badge">{{ members|length }}</span></div>
+    {% if can_edit %}
+      <form class="form-grid js-loading-form" method="post" action="/departments/{{ department.id }}/members">
+        <label>Usuario<select name="user_id" required><option value="">Selecciona un usuario</option>{% for item in available_users %}<option value="{{ item.id }}">{{ item.name }} · {{ item.email }}</option>{% endfor %}</select></label>
+        <label>Rol en el departamento<input name="role" placeholder="Coordinación"></label>
+        <div><button type="submit">{{ icon_plus(14) }} Añadir miembro</button></div>
+      </form>
+    {% endif %}
+    <div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th>{% if can_edit %}<th>Acciones</th>{% endif %}</tr></thead><tbody>
+      {% for item in members %}<tr><td><strong>{{ item.user.name if item.user else "Usuario no disponible" }}</strong><br><span class="muted">{{ item.user.email if item.user else "" }}</span></td><td>{{ item.role or "Sin rol" }}</td><td><span class="badge {% if item.active %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activo" if item.active else "Inactivo" }}</span></td>{% if can_edit %}<td><div class="stack-inline"><form method="post" action="/departments/{{ department.id }}/members/{{ item.id }}/toggle" class="js-loading-form"><button class="button secondary compact-button" type="submit">{{ "Desactivar" if item.active else "Activar" }}</button></form><form method="post" action="/departments/{{ department.id }}/members/{{ item.id }}/remove" class="js-loading-form" data-confirm="¿Retirar este miembro?"><button class="button danger-soft compact-button" type="submit">{{ icon_trash(14) }} Retirar</button></form></div></td>{% endif %}</tr>
+      {% else %}<tr><td colspan="4" class="muted">No hay miembros vinculados.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  <section class="panel stack">
+    <div class="section-title-row"><div><h3>RACI</h3><p class="muted">Asigna una responsabilidad sencilla por ámbito. El usuario es opcional cuando la responsabilidad corresponde al departamento.</p></div><span class="badge">{{ raci|length }}</span></div>
+    {% if can_edit %}
+      <form class="form-grid js-loading-form" method="post" action="/departments/{{ department.id }}/raci">
+        <label>Ámbito<input name="scope" required placeholder="delivery_incident"></label>
+        <label>Rol<select name="raci_role" required>{% for key, label in raci_roles %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+        <label>Usuario (opcional)<select name="user_id"><option value="">El departamento</option>{% for item in all_users %}<option value="{{ item.id }}">{{ item.name }} · {{ item.email }}</option>{% endfor %}</select></label>
+        <div><button type="submit">{{ icon_plus(14) }} Añadir asignación</button></div>
+      </form>
+    {% endif %}
+    <div class="table-wrap"><table><thead><tr><th>Ámbito</th><th>Rol</th><th>Departamento</th><th>Usuario</th><th>Estado</th>{% if can_edit %}<th>Acciones</th>{% endif %}</tr></thead><tbody>
+      {% for item in raci %}<tr><td>{% if can_edit %}<input form="raci-edit-{{ item.id }}" name="scope" value="{{ item.scope }}" aria-label="Ámbito">{% else %}<strong>{{ item.scope }}</strong>{% endif %}</td><td>{% if can_edit %}<select form="raci-edit-{{ item.id }}" name="raci_role" aria-label="Rol RACI">{% for key, label in raci_roles %}<option value="{{ key }}" {% if key == item.raci_role %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% else %}{{ role_label(item.raci_role) }}{% endif %}</td><td>{{ department.name }}</td><td>{% if can_edit %}<select form="raci-edit-{{ item.id }}" name="user_id" aria-label="Usuario RACI"><option value="">Departamento</option>{% for user_item in all_users %}<option value="{{ user_item.id }}" {% if item.user_id == user_item.id %}selected{% endif %}>{{ user_item.name }}</option>{% endfor %}</select>{% else %}{{ item.user.name if item.user else "Departamento" }}{% endif %}</td><td><span class="badge {% if item.active %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activo" if item.active else "Inactivo" }}</span></td>{% if can_edit %}<td><form id="raci-edit-{{ item.id }}" method="post" action="/departments/{{ department.id }}/raci/{{ item.id }}" class="js-loading-form"><input name="active" type="hidden" value="{% if item.active %}on{% endif %}"><button class="button secondary compact-button" type="submit">{{ icon_edit(14) }} Guardar</button></form><div class="stack-inline"><form method="post" action="/departments/{{ department.id }}/raci/{{ item.id }}/toggle" class="js-loading-form"><button class="button secondary compact-button" type="submit">{{ "Desactivar" if item.active else "Activar" }}</button></form><form method="post" action="/departments/{{ department.id }}/raci/{{ item.id }}/delete" class="js-loading-form" data-confirm="¿Eliminar esta asignación RACI?"><button class="button danger-soft compact-button" type="submit">{{ icon_trash(14) }} Eliminar</button></form></div></td>{% endif %}</tr>
+      {% else %}<tr><td colspan="6" class="muted">No hay asignaciones RACI.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  {% if can_edit %}
+    <section class="panel stack">
+      <div class="section-title-row"><div><h3>Zona de mantenimiento</h3><p class="muted">El borrado solo funciona cuando no quedan conocimiento, miembros ni asignaciones RACI.</p></div><form method="post" action="/departments/{{ department.id }}/toggle" class="js-loading-form"><button class="button secondary compact-button" type="submit">{{ "Desactivar departamento" if department.active else "Activar departamento" }}</button></form></div>
+      <form method="post" action="/departments/{{ department.id }}/delete" class="js-loading-form" data-confirm="¿Borrar este departamento? El borrado se rechazará si tiene dependencias."><button class="button danger-soft compact-button" type="submit">{{ icon_trash(14) }} Borrar de forma segura</button></form>
+    </section>
+  {% endif %}
+</section>
+{% endblock %}

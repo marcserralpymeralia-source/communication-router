@@ -377,7 +377,7 @@ class ProductMatchingService:
                     )
                 ).all()
 
-                if len(partial_matches) == 1 and _product_name_is_compatible(detected_name, partial_matches[0]):
+                if len(partial_matches) == 1:
                     return partial_matches[0], "referencia_parcial_unica", 0.95
         if detected_name:
             learned = db.scalar(

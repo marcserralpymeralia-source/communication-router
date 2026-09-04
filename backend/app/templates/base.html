@@ -51,6 +51,8 @@
       {% set href_customers = '/customers' %}
       {% set href_products = '/products' %}
       {% set href_settings = '/settings' %}
+      {% set href_departments = '/departments' %}
+      {% set href_communications = '/communications/workbench' %}
       {% set href_import_manual = request.url_for('manual_import_page') if request.url_for is defined else '/imports/manual' %}
       <nav class="nav">
         <a href="{{ href_orders }}" title="Pedidos" class="{% if request.url.path in ['/', '/inicio', '/workbench'] or (request.url.path.startswith('/orders') and request.query_params.get('archived') != 'true') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(20) }}</span><span class="nav-label">Pedidos</span></a>
@@ -63,6 +65,8 @@
         {% endif %}
         <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">{{ icon_customers(20) }}</span><span class="nav-label">Clientes</span></a>
         <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(20) }}</span><span class="nav-label">Productos</span></a>
+        <a href="{{ href_departments }}" title="Departamentos" class="{% if request.url.path.startswith('/departments') %}active{% endif %}"><span class="nav-icon">{{ icon_book_open(20) }}</span><span class="nav-label">Departamentos</span></a>
+        <a href="{{ href_communications }}" title="Comunicaciones" class="{% if request.url.path.startswith('/communications') %}active{% endif %}"><span class="nav-icon">{{ icon_mail(20) }}</span><span class="nav-label">Comunicaciones</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
           <a href="{{ href_settings }}" title="Configuración" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(20) }}</span><span class="nav-label">Configuración</span></a>
         {% endif %}

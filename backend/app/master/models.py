@@ -133,6 +133,59 @@ class EmailSyncState(MasterBase):
     __table_args__ = (UniqueConstraint("company_id", "channel_key"),)
 
 
+class MailboxSyncState(MasterBase):
+    __tablename__ = "mailbox_sync_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    mailbox_id: Mapped[int] = mapped_column(Integer, index=True)
+    uidvalidity: Mapped[str | None] = mapped_column(String(120))
+    source_provider: Mapped[str | None] = mapped_column(String(50))
+    source_host: Mapped[str | None] = mapped_column(String(255))
+    source_username: Mapped[str | None] = mapped_column(String(255))
+    source_connected_email: Mapped[str | None] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    frequency_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_type: Mapped[str | None] = mapped_column(String(120))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(50), default="idle")
+    sync_status: Mapped[str] = mapped_column(String(50), default="idle")
+    listener_status: Mapped[str] = mapped_column(String(50), default="inactive")
+    listener_owner: Mapped[str | None] = mapped_column(String(120))
+    listener_last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    listener_last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    listener_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    listener_last_error_message: Mapped[str | None] = mapped_column(Text)
+    lock_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lock_owner: Mapped[str | None] = mapped_column(String(120))
+    last_seen_uid: Mapped[str | None] = mapped_column(String(120))
+    last_checkpoint_uid: Mapped[str | None] = mapped_column(String(120))
+    backfill_status: Mapped[str] = mapped_column(String(50), default="idle")
+    backfill_total: Mapped[int] = mapped_column(Integer, default=0)
+    backfill_processed: Mapped[int] = mapped_column(Integer, default=0)
+    backfill_created: Mapped[int] = mapped_column(Integer, default=0)
+    backfill_duplicates: Mapped[int] = mapped_column(Integer, default=0)
+    backfill_errors: Mapped[int] = mapped_column(Integer, default=0)
+    backfill_last_uid: Mapped[str | None] = mapped_column(String(120))
+    backfill_checkpoint_json: Mapped[str | None] = mapped_column(Text)
+    backfill_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backfill_last_checkpoint_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backfill_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backfill_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backfill_cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    company: Mapped[MasterCompany] = relationship()
+
+    __table_args__ = (UniqueConstraint("company_id", "mailbox_id"),)
+
+
 class MasterSchemaMigration(MasterBase):
     __tablename__ = "schema_migrations"
 

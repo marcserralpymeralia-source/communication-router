@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-section stack">
+  <div class="section-title-row">
+    <div>
+      <a class="muted" href="/communications/workbench">Comunicaciones</a>
+      <h2>{{ communication.subject or "Sin asunto" }}</h2>
+      <p class="muted">{{ communication.sender_name or "Sin remitente" }} · {{ communication.sender_email or "" }}</p>
+    </div>
+    <span class="badge">{{ communication.routing_status }}</span>
+  </div>
+
+  {% if error %}<div class="subpanel status-error">{{ error }}</div>{% endif %}
+
+  <div class="detail-grid">
+    <article class="subpanel stack">
+      <div class="section-title-row"><h3>Contenido</h3><span class="muted">{{ communication.provider }}</span></div>
+      <p class="muted">Para: {{ communication.to_recipients or "Sin destinatarios" }}</p>
+      <pre class="whatsapp-chat-text">{{ communication.body_text or "Sin contenido" }}</pre>
+      {% if communication.attachments %}
+        <h4>Adjuntos</h4>
+        {% for attachment in communication.attachments %}<div>{{ attachment.filename }} <span class="muted">({{ attachment.extraction_status }})</span></div>{% endfor %}
+      {% endif %}
+    </article>
+
+    <aside class="subpanel stack">
+      <div class="section-title-row"><h3>Routing</h3><span class="badge">{{ decision.status if decision else "unclassified" }}</span></div>
+      {% if decision %}
+        <div><strong>Propuesta:</strong> {{ decision.department_id or "Sin departamento" }}</div>
+        <div><strong>Categoría:</strong> {{ decision.category }}</div>
+        <div><strong>Confianza:</strong> {{ "%.0f"|format(decision.confidence * 100) }}%</div>
+        <p>{{ decision.reason }}</p>
+        {% if decision.ambiguity_reason %}<p class="muted">{{ decision.ambiguity_reason }}</p>{% endif %}
+        {% if decision.status == "pending_review" %}
+          <form method="post" action="/communications/{{ communication.id }}/confirm">
+            <input type="hidden" name="decision_id" value="{{ decision.id }}">
+            <button class="button" type="submit">Confirmar propuesta</button>
+          </form>
+          <form method="post" action="/communications/{{ communication.id }}/correct" class="stack">
+            <input type="hidden" name="decision_id" value="{{ decision.id }}">
+            <label>Departamento final
+              <select name="corrected_department_id" required>
+                {% for department in departments %}<option value="{{ department.id }}">{{ department.name }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Motivo de la corrección
+              <textarea name="reason" required rows="3"></textarea>
+            </label>
+            <button class="button secondary" type="submit">Guardar corrección</button>
+          </form>
+        {% endif %}
+      {% else %}
+        <p class="muted">Todavía no hay una decisión persistida.</p>
+      {% endif %}
+      <form method="post" action="/communications/{{ communication.id }}/analyze">
+        <button class="button secondary" type="submit">Analizar comunicación</button>
+      </form>
+    </aside>
+  </div>
+
+  <article class="subpanel stack">
+    <h3>Historial de decisiones</h3>
+    {% for item in history %}
+      <div class="review-inline-summary">
+        <span><strong>#{{ item.analysis_number }}</strong> {{ item.status }}</span>
+        <span>{{ item.confidence | round(2) }} · {{ item.category }}</span>
+        <span>{{ item.created_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if item.created_at else "" }}</span>
+      </div>
+    {% else %}<p class="muted">Sin análisis previos.</p>{% endfor %}
+  </article>
+</section>
+{% endblock %}
