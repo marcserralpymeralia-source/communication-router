@@ -235,7 +235,7 @@ def provision_external_tenant(
     return {
         "company_id": str(company.id),
         "company_slug": company.slug,
-        "tenant_database": tenant.database_url,
+        "tenant_database": tenant.get_database_url(),
         "admin_email": admin_email,
         "membership_id": str(membership.id),
         "health_status": tenant.health_status,

@@ -27,4 +27,10 @@ def get_master_db() -> Generator[Session, None, None]:
 def init_master_db() -> None:
     from app.master import models  # noqa: F401
 
+    if settings.app_slug.strip().lower() == "kibak":
+        from app.migrations.kibak_baseline import KIBAK_MASTER_TABLES
+
+        tables = [MasterBase.metadata.tables[name] for name in KIBAK_MASTER_TABLES]
+        MasterBase.metadata.create_all(bind=engine, tables=tables)
+        return
     MasterBase.metadata.create_all(bind=engine)

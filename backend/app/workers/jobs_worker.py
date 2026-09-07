@@ -785,9 +785,10 @@ def _handle_tenant_jobs(
     *,
     max_jobs: int | None = None,
 ) -> dict[str, int]:
-    if not tenant.database_url:
+    database_url = tenant.get_database_url()
+    if not database_url:
         return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 0}
-    session_factory = tenant_db_session(tenant.database_url)
+    session_factory = tenant_db_session(database_url)
     db = session_factory()
     recovered_jobs = 0
     attempted_jobs = 0

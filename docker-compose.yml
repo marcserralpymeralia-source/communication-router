@@ -6,14 +6,17 @@ services:
     env_file:
       - backend/.env
     environment:
-      APP_ENV: production
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi
-      MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi_master
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
+      TENANT_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
+      MASTER_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_master
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "8000:8000"
+    networks:
+      - kibak_local
 
   worker:
     build:
@@ -22,30 +25,39 @@ services:
     env_file:
       - backend/.env
     environment:
-      APP_ENV: production
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi
-      MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi_master
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
+      TENANT_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
+      MASTER_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_master
     depends_on:
       postgres:
         condition: service_healthy
     command: ["python", "-m", "app.workers.jobs_worker"]
+    networks:
+      - kibak_local
 
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_DB: anchi_master
+      POSTGRES_PASSWORD: kibak_local_dev_password
+      POSTGRES_USER: kibak_local
+      POSTGRES_DB: kibak_master
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d anchi_master"]
+      test: ["CMD-SHELL", "pg_isready -U kibak_local -d kibak_master"]
       interval: 10s
       timeout: 5s
       retries: 10
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - kibak_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5432:5432"
+      - "5433:5432"
+    networks:
+      - kibak_local
 
 volumes:
-  postgres_data:
+  kibak_postgres_data:
 
+networks:
+  kibak_local:
+    name: kibak_local_network

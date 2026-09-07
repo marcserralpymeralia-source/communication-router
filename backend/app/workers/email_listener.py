@@ -100,7 +100,7 @@ def reconcile_mailbox_email(
 ) -> dict:
     state = state or get_or_create_mailbox_sync_state(master_db, mailbox)
     mark_listener_heartbeat(master_db, state, owner=owner, status="reconciling")
-    session_factory = tenant_db_session(tenant.database_url)
+    session_factory = tenant_db_session(tenant.get_database_url())
     db = session_factory()
     try:
         if not mailbox.enabled:
@@ -147,7 +147,7 @@ def reconcile_mailbox_email(
 def reconcile_tenant_email(master_db: Session, tenant: MasterTenantDatabase, *, owner: str, force: bool = False) -> dict:
     state = _state_for_company(master_db, tenant.company_id)
     mark_listener_heartbeat(master_db, state, owner=owner, status="reconciling")
-    session_factory = tenant_db_session(tenant.database_url)
+    session_factory = tenant_db_session(tenant.get_database_url())
     db = session_factory()
     try:
         settings = get_or_create_settings(db, EmailSettings, tenant.company_id)
@@ -216,7 +216,7 @@ def run_email_listener_once(*, owner: str | None = None, force: bool = False) ->
             for mailbox_state in mailbox_states:
                 if not force and (not mailbox_state.enabled or (mailbox_state.next_run_at and mailbox_state.next_run_at > _now())):
                     continue
-                session_factory = tenant_db_session(tenant.database_url)
+                session_factory = tenant_db_session(tenant.get_database_url())
                 db = session_factory()
                 try:
                     mailbox = db.get(Mailbox, mailbox_state.mailbox_id)

@@ -57,7 +57,7 @@ class EndpointSummary:
 
 
 def _prepare_import_environment() -> None:
-    bootstrap_root = Path(tempfile.mkdtemp(prefix="anchi-performance-bootstrap-"))
+    bootstrap_root = Path(tempfile.mkdtemp(prefix="kibak-performance-bootstrap-"))
     os.environ.setdefault("APP_ENV", "test")
     os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
     os.environ.setdefault("PERFORMANCE_PROFILING_ENABLED", "true")

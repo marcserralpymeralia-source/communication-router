@@ -545,6 +545,7 @@ class RoutingDecision(Base):
             name="fk_routing_decision_reviewer_company",
             ondelete="RESTRICT",
         ),
+        UniqueConstraint("company_id", "id"),
         UniqueConstraint("company_id", "communication_id", "analysis_number"),
     )
 

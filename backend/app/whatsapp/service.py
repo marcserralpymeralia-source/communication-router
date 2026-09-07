@@ -1175,7 +1175,7 @@ def resolve_company_from_whatsapp_identifiers(
     tenants = master_db.scalars(select(MasterTenantDatabase).where(MasterTenantDatabase.is_active.is_(True))).all()
     matches: list[tuple[MasterCompany, MasterTenantDatabase]] = []
     for tenant in tenants:
-        tenant_db = tenant_db_session(tenant.database_url)()
+        tenant_db = tenant_db_session(tenant.get_database_url())()
         try:
             channel = tenant_db.scalar(
                 select(InputChannel).where(

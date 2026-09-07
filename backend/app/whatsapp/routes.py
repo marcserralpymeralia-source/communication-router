@@ -72,7 +72,7 @@ async def receive_default_webhook(
         if not company or not tenant_db:
             ignored += 1
             continue
-        config_db = tenant_db_session(tenant_db.database_url)()
+        config_db = tenant_db_session(tenant_db.get_database_url())()
         try:
             config = whatsapp_config(config_db, company.id)
             if event.get("kind") != "account_update" and not whatsapp_ingress_is_ready(config_db, company.id, config=config):
@@ -103,7 +103,7 @@ def verify_webhook(company_slug: str, request: Request, master_db: Session = Dep
     company, tenant_db = resolve_company_from_slug(master_db, company_slug)
     if not company or not tenant_db:
         return PlainTextResponse("unknown tenant", status_code=404)
-    config_db = tenant_db_session(tenant_db.database_url)()
+    config_db = tenant_db_session(tenant_db.get_database_url())()
     try:
         config = whatsapp_config(config_db, company.id)
     finally:
@@ -129,7 +129,7 @@ async def receive_webhook(
     if not company or not tenant_db:
         return JSONResponse({"ok": False, "message": "tenant not found"}, status_code=404)
     raw_body = await request.body()
-    config_db = tenant_db_session(tenant_db.database_url)()
+    config_db = tenant_db_session(tenant_db.get_database_url())()
     try:
         config = whatsapp_config(config_db, company.id)
         if not verify_signature(get_settings().meta_app_secret, raw_body, x_hub_signature_256):

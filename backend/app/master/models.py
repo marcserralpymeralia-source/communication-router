@@ -2,12 +2,44 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 
+from app.core.encryption import decrypt_secret, encrypt_secret
 from app.master.database import MasterBase
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class EncryptedDatabaseUrl(TypeDecorator[str]):
+    """Store tenant URLs encrypted while exposing plaintext only in Python."""
+
+    impl = Text
+    cache_ok = True
+
+    @staticmethod
+    def _is_local_url(value: str) -> bool:
+        # Local SQLite fixtures contain a filesystem path, not connection secrets.
+        return value.lower().startswith("sqlite")
+
+    def process_bind_param(self, value: str | None, dialect) -> str | None:  # noqa: ARG002
+        if value and self._is_local_url(value):
+            return value
+        return encrypt_secret(value)
+
+    def process_result_value(self, value: str | None, dialect) -> str | None:  # noqa: ARG002
+        if not value:
+            return value
+        if self._is_local_url(value):
+            return value
+        decrypted = decrypt_secret(value)
+        if decrypted is not None:
+            return decrypted
+        # Existing pre-baseline rows may still contain a plaintext URL.
+        if not value.startswith("gAAAA"):
+            return value
+        raise ValueError("Cannot decrypt tenant database URL; check ENCRYPTION_KEY")
 
 
 class MasterCompany(MasterBase):
@@ -66,7 +98,7 @@ class MasterTenantDatabase(MasterBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     database_key: Mapped[str] = mapped_column(String(120), unique=True, index=True)
-    database_url: Mapped[str] = mapped_column(Text)
+    database_url: Mapped[str] = mapped_column(EncryptedDatabaseUrl)
     database_type: Mapped[str] = mapped_column(String(30), default="sqlite")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -77,6 +109,10 @@ class MasterTenantDatabase(MasterBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     company: Mapped[MasterCompany] = relationship(back_populates="tenant_databases")
+
+    def get_database_url(self) -> str | None:
+        """Return the usable URL; the mapped column is encrypted at rest."""
+        return self.database_url
 
 
 class EmailSyncState(MasterBase):

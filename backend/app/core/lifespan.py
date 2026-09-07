@@ -32,25 +32,26 @@ async def app_lifespan(app: FastAPI):
                 MasterTenantDatabase.database_url.is_not(None),
             )
         ).all()
-        for tenant in tenants:
-            state = master_db.scalar(
-                select(EmailSyncState).where(
-                    EmailSyncState.company_id == tenant.company_id,
-                    EmailSyncState.channel_key == "email",
-                )
-            )
-            if not state:
-                master_db.add(
-                    EmailSyncState(
-                        company_id=tenant.company_id,
-                        channel_key="email",
-                        enabled=True,
-                        frequency_seconds=60,
-                        status="idle",
-                        next_run_at=datetime.now(timezone.utc),
+        if settings.app_slug.strip().lower() != "kibak":
+            for tenant in tenants:
+                state = master_db.scalar(
+                    select(EmailSyncState).where(
+                        EmailSyncState.company_id == tenant.company_id,
+                        EmailSyncState.channel_key == "email",
                     )
                 )
-                master_db.commit()
+                if not state:
+                    master_db.add(
+                        EmailSyncState(
+                            company_id=tenant.company_id,
+                            channel_key="email",
+                            enabled=True,
+                            frequency_seconds=60,
+                            status="idle",
+                            next_run_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    master_db.commit()
         if settings.enable_legacy_sync:
             logger.info("Legacy sync enabled explicitly")
     except SQLAlchemyError:

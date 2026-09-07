@@ -19,10 +19,10 @@ class ImportStorageTests(unittest.TestCase):
             self.assertEqual(resolve_temp_storage_dir("import_previews"), Path("/custom/anchi/import_previews"))
 
         with patch.dict(os.environ, {"TEMP_STORAGE_DIR": "", "VERCEL": "1"}, clear=False):
-            self.assertEqual(resolve_temp_storage_dir("import_previews"), Path("/tmp/anchi/import_previews"))
+            self.assertEqual(resolve_temp_storage_dir("import_previews"), Path("/tmp/kibak/import_previews"))
 
         with patch.dict(os.environ, {"TEMP_STORAGE_DIR": "", "VERCEL": ""}, clear=False):
-            expected = Path(__file__).resolve().parents[1] / "app" / "storage" / "import_previews"
+            expected = Path(__file__).resolve().parents[1] / "storage" / "import_previews"
             self.assertEqual(resolve_temp_storage_dir("import_previews"), expected)
 
     def test_imports_service_does_not_create_preview_dir_during_import(self):
@@ -34,7 +34,7 @@ class ImportStorageTests(unittest.TestCase):
                 side_effect=AssertionError("mkdir should not be called during import"),
             ):
                 module = importlib.import_module(module_name)
-                self.assertEqual(str(module.PREVIEW_DIR), "/tmp/anchi/import_previews")
+                self.assertEqual(str(module.PREVIEW_DIR), "/tmp/kibak/import_previews")
         finally:
             sys.modules.pop(module_name, None)
             if previous is not None:

@@ -13,7 +13,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 os.environ.setdefault("PERFORMANCE_PROFILING_ENABLED", "true")
 os.environ.setdefault("ENABLE_PERFORMANCE_PROFILING", "true")
 
-_bootstrap_root = Path(tempfile.gettempdir()) / "anchi-performance-tests"
+_bootstrap_root = Path(tempfile.gettempdir()) / "kibak-performance-tests"
 _bootstrap_root.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MASTER_DATABASE_URL", f"sqlite:///{(_bootstrap_root / 'master.sqlite').as_posix()}")
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{(_bootstrap_root / 'tenant.sqlite').as_posix()}")

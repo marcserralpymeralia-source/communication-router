@@ -82,13 +82,14 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
                 MasterTenantDatabase.is_active.is_(True),
             )
         )
-        if not tenant or not tenant.database_url:
+        database_url = tenant.get_database_url() if tenant else None
+        if not database_url:
             result["skipped"] += 1
             continue
         if not _acquire_lock(master_db, state, owner="cron-email-sync"):
             result["skipped"] += 1
             continue
-        session_factory = tenant_db_session(tenant.database_url)
+        session_factory = tenant_db_session(database_url)
         db = session_factory()
         try:
             settings = get_or_create_settings(db, EmailSettings, tenant.company_id)
@@ -161,10 +162,11 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
                 MasterTenantDatabase.is_active.is_(True),
             )
         )
-        if not tenant or not tenant.database_url or not _acquire_lock(master_db, state, owner="cron-mailbox-sync"):
+        database_url = tenant.get_database_url() if tenant else None
+        if not database_url or not _acquire_lock(master_db, state, owner="cron-mailbox-sync"):
             result["skipped"] += 1
             continue
-        session_factory = tenant_db_session(tenant.database_url)
+        session_factory = tenant_db_session(database_url)
         db = session_factory()
         try:
             mailbox = db.get(Mailbox, state.mailbox_id)

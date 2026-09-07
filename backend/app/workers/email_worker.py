@@ -90,7 +90,7 @@ def _run_due_tenant(master_db: Session, tenant: MasterTenantDatabase, state: Ema
 
 
 def _run_due_mailbox(master_db: Session, tenant: MasterTenantDatabase, state: MailboxSyncState) -> None:
-    session_factory = tenant_db_session(tenant.database_url)
+    session_factory = tenant_db_session(tenant.get_database_url())
     db = session_factory()
     try:
         mailbox = db.get(Mailbox, state.mailbox_id)
@@ -115,18 +115,21 @@ def _worker_loop() -> None:
         master_db = master_database.MasterSessionLocal()
         try:
             now = datetime.now(timezone.utc)
-            due_states = master_db.scalars(
-                select(EmailSyncState)
-                .join(MasterTenantDatabase, MasterTenantDatabase.company_id == EmailSyncState.company_id)
-                .where(
-                    MasterTenantDatabase.is_active.is_(True),
-                    MasterTenantDatabase.database_url.is_not(None),
-                    EmailSyncState.enabled.is_(True),
-                    EmailSyncState.channel_key == "email",
-                    EmailSyncState.next_run_at.is_not(None),
-                    EmailSyncState.next_run_at <= now,
-                )
-            ).all()
+            if settings.app_slug.strip().lower() == "kibak":
+                due_states = []
+            else:
+                due_states = master_db.scalars(
+                    select(EmailSyncState)
+                    .join(MasterTenantDatabase, MasterTenantDatabase.company_id == EmailSyncState.company_id)
+                    .where(
+                        MasterTenantDatabase.is_active.is_(True),
+                        MasterTenantDatabase.database_url.is_not(None),
+                        EmailSyncState.enabled.is_(True),
+                        EmailSyncState.channel_key == "email",
+                        EmailSyncState.next_run_at.is_not(None),
+                        EmailSyncState.next_run_at <= now,
+                    )
+                ).all()
             for state in due_states:
                 tenant = master_db.scalar(
                     select(MasterTenantDatabase).where(
@@ -134,7 +137,7 @@ def _worker_loop() -> None:
                         MasterTenantDatabase.is_active.is_(True),
                     )
                 )
-                if not tenant or not tenant.database_url:
+                if not tenant or not tenant.get_database_url():
                     continue
                 if not _acquire_lock(master_db, state, owner="email-worker"):
                     continue
@@ -157,7 +160,7 @@ def _worker_loop() -> None:
                         MasterTenantDatabase.is_active.is_(True),
                     )
                 )
-                if not tenant or not tenant.database_url:
+                if not tenant or not tenant.get_database_url():
                     continue
                 if not _acquire_lock(master_db, state, owner="email-worker"):
                     continue

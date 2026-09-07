@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
-DEV_SECRET_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"order-agent-dev-secret-key").digest()).decode()
+DEV_SECRET_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"kibak-local-development-key").digest()).decode()
 ALLOWED_ENVIRONMENTS = {"development", "demo", "test", "production"}
 LOCAL_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
 LOCAL_CORS_ORIGINS = [
@@ -98,10 +98,10 @@ def _sanitize_database_url(url: str | None) -> str:
 
 
 class Settings(BaseSettings):
-    app_name: str = "Anchi"
-    app_slug: str = "anchi"
-    database_url: str = "sqlite:///./anchi_demo.db"
-    master_database_url: str = "sqlite:///./master.db"
+    app_name: str = "KIBAK"
+    app_slug: str = "kibak"
+    database_url: str = "sqlite:///./kibak_local.db"
+    master_database_url: str = "sqlite:///./kibak_master.db"
     tenant_db_mode: str = Field(default="sqlite", validation_alias=AliasChoices("TENANT_DB_MODE"))
     tenant_database_url: str | None = Field(default=None, validation_alias=AliasChoices("TENANT_DATABASE_URL"))
     app_secret_key: str = Field(default=DEV_SECRET_KEY, validation_alias=AliasChoices("SECRET_KEY", "APP_SECRET_KEY"))
@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     )
     meta_oauth_redirect_uri: str = Field(default="", validation_alias="META_OAUTH_REDIRECT_URI")
     meta_request_timeout_seconds: int = Field(default=20, validation_alias="META_REQUEST_TIMEOUT_SECONDS")
-    session_cookie: str = "anchi_session"
+    session_cookie: str = "kibak_session"
     session_cookie_secure: bool | None = Field(default=None, validation_alias="SESSION_COOKIE_SECURE")
     session_cookie_samesite: str | None = Field(default=None, validation_alias="SESSION_COOKIE_SAMESITE")
     session_max_age: int | None = Field(default=None, validation_alias="SESSION_MAX_AGE")
@@ -148,17 +148,17 @@ class Settings(BaseSettings):
     allowed_hosts_raw: str | None = Field(default=None, validation_alias="ALLOWED_HOSTS")
     environment: str = Field(default="development", validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"))
     debug: bool | None = Field(default=None, validation_alias="DEBUG")
-    default_company_name: str = "Anchi Demo"
-    default_admin_email: str = "admin@anchi.local"
-    default_admin_password: str = "AnchiDemo2026!"
+    default_company_name: str = "KIBAK Test"
+    default_admin_email: str = "admin@kibak.local"
+    default_admin_password: str = ""
     seed_demo_data: bool | None = Field(default=None, validation_alias=AliasChoices("ENABLE_DEMO_BOOTSTRAP", "SEED_DEMO_DATA"))
-    branding_app_name: str = "Anchi"
-    branding_primary_claim: str = "Gestion inteligente de pedidos"
+    branding_app_name: str = "KIBAK"
+    branding_primary_claim: str = "Comunicaciones y routing inteligente"
     branding_secondary_claim: str = ""
     branding_logo_url: str = ""
     branding_dark_logo_url: str = ""
     branding_favicon_url: str = ""
-    email_signature_text: str = "Equipo de pedidos"
+    email_signature_text: str = "Equipo KIBAK"
     log_format: str = Field(default="json", validation_alias=AliasChoices("LOG_FORMAT", "APP_LOG_FORMAT"))
     log_level: str = Field(default="info", validation_alias=AliasChoices("LOG_LEVEL", "APP_LOG_LEVEL"))
     performance_profiling_enabled: bool = Field(
@@ -267,7 +267,7 @@ class Settings(BaseSettings):
                 raise ValueError("DATABASE_URL cannot use sqlite in production")
             if self.master_database_url.startswith("sqlite"):
                 raise ValueError("MASTER_DATABASE_URL cannot use sqlite in production")
-            if self.default_admin_email.strip().lower() == "admin@anchi.local":
+            if self.default_admin_email.strip().lower() == "admin@kibak.local":
                 raise ValueError("DEFAULT_ADMIN_EMAIL must be customized in production")
             if self.default_admin_password.strip().lower() in PROHIBITED_ADMIN_PASSWORDS or len(self.default_admin_password.strip()) < 12:
                 raise ValueError("DEFAULT_ADMIN_PASSWORD must be stronger than the demo value in production")

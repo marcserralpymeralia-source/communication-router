@@ -407,12 +407,13 @@ def resolve_master_references(master_db) -> list[DatabaseReference]:  # noqa: AN
     user_count = master_db.scalar(select(MasterUser.id).limit(1))
     for tenant in tenants:
         company = tenant.company
+        database_url = tenant.get_database_url()
         refs.append(
             DatabaseReference(
                 logical_name=f"tenant:{company.slug if company else tenant.database_key or tenant.company_id}",
                 reference_type="tenant",
-                database_url=tenant.database_url,
-                engine="sqlite" if tenant.database_url.startswith("sqlite") else "postgresql",
+                database_url=database_url,
+                engine="sqlite" if database_url.startswith("sqlite") else "postgresql",
                 kind_hint="tenant",
                 company_id=tenant.company_id,
                 company_slug=company.slug if company else None,

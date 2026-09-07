@@ -57,16 +57,17 @@ def company_diagnostics(master_db: Session, company_id: int) -> dict:
         "company_slug": company.slug if company else "",
         "company_active": bool(company.active) if company else False,
         "tenant_database_id": tenant.id if tenant else None,
-        "tenant_database_configured": bool(tenant and tenant.database_url),
+        "tenant_database_configured": bool(tenant and tenant.get_database_url()),
         "tenant_database_status": tenant.health_status if tenant else "missing",
         "tenant_database_provisioned_at": tenant.provisioned_at if tenant else None,
         "tenant_database_last_health_check_at": tenant.last_health_check_at if tenant else None,
         "tenant_database_notes": tenant.notes if tenant else None,
     }
-    if not tenant or not tenant.database_url:
+    database_url = tenant.get_database_url() if tenant else None
+    if not database_url:
         return {**base, **_zero_payload(company, tenant)}
 
-    session_factory = tenant_db_session(tenant.database_url)
+    session_factory = tenant_db_session(database_url)
     db = session_factory()
     try:
         email_settings = get_or_create_settings(db, EmailSettings, company_id)

@@ -9,8 +9,8 @@ def resolve_temp_storage_root() -> Path:
     if configured:
         return Path(configured).expanduser()
     if os.getenv("VERCEL") == "1":
-        return Path("/tmp/anchi")
-    return Path(__file__).resolve().parents[1] / "storage"
+        return Path("/tmp/kibak")
+    return Path(__file__).resolve().parents[2] / "storage"
 
 
 def resolve_temp_storage_dir(*parts: str) -> Path:
