@@ -14,6 +14,7 @@ from app.migrations.registry import (
     CURRENT_MASTER_SCHEMA_VERSION,
     MASTER_SCHEMA_MIGRATIONS,
 )
+from app.migrations.kibak_baseline import KIBAK_MASTER_BASELINE_VERSION
 from app.migrations.runner import migration_summary, run_migration_plan
 
 
@@ -23,6 +24,12 @@ MASTER_MIGRATION_COLUMNS = {
     "execution_ms": "INTEGER DEFAULT 0",
     "application_version": "VARCHAR(80)",
 }
+
+
+def _master_contract(state: MasterSchemaMigration | None) -> tuple[str, str, str]:
+    if state and state.version == KIBAK_MASTER_BASELINE_VERSION:
+        return KIBAK_MASTER_BASELINE_VERSION, "KIBAK master baseline", KIBAK_MASTER_BASELINE_VERSION
+    return CURRENT_MASTER_SCHEMA_VERSION, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_CHECKSUM
 
 
 def _now() -> datetime:
@@ -114,16 +121,19 @@ def upgrade_master_schema(
 
 
 def master_migration_report(db: Session, *, persist: bool = False) -> dict:
-    if not table_exists(db.get_bind(), "schema_migrations"):
+    schema_table_exists = table_exists(db.get_bind(), "schema_migrations")
+    state = _latest_state(db) if schema_table_exists else None
+    current_version, current_name, current_checksum = _master_contract(state)
+    if not schema_table_exists:
         return {
             "version": None,
             "name": None,
             "checksum": None,
             "execution_ms": None,
             "application_version": None,
-            "current_version": CURRENT_MASTER_SCHEMA_VERSION,
-            "current_name": CURRENT_MASTER_SCHEMA_NAME,
-            "current_checksum": CURRENT_MASTER_SCHEMA_CHECKSUM,
+            "current_version": current_version,
+            "current_name": current_name,
+            "current_checksum": current_checksum,
             "status": "missing",
             "last_checked_at": None,
             "applied_at": None,
@@ -139,9 +149,9 @@ def master_migration_report(db: Session, *, persist: bool = False) -> dict:
             "checksum": None,
             "execution_ms": None,
             "application_version": None,
-            "current_version": CURRENT_MASTER_SCHEMA_VERSION,
-            "current_name": CURRENT_MASTER_SCHEMA_NAME,
-            "current_checksum": CURRENT_MASTER_SCHEMA_CHECKSUM,
+            "current_version": current_version,
+            "current_name": current_name,
+            "current_checksum": current_checksum,
             "status": "incomplete",
             "last_checked_at": None,
             "applied_at": None,
@@ -149,7 +159,7 @@ def master_migration_report(db: Session, *, persist: bool = False) -> dict:
             "notes": None,
             "is_current": False,
         }
-    state = _latest_state(db)
+    state = state or _latest_state(db)
     now = _now()
     if not state:
         return {
@@ -158,9 +168,9 @@ def master_migration_report(db: Session, *, persist: bool = False) -> dict:
             "checksum": None,
             "execution_ms": None,
             "application_version": None,
-            "current_version": CURRENT_MASTER_SCHEMA_VERSION,
-            "current_name": CURRENT_MASTER_SCHEMA_NAME,
-            "current_checksum": CURRENT_MASTER_SCHEMA_CHECKSUM,
+            "current_version": current_version,
+            "current_name": current_name,
+            "current_checksum": current_checksum,
             "status": "missing",
             "last_checked_at": None,
             "applied_at": None,
@@ -172,7 +182,7 @@ def master_migration_report(db: Session, *, persist: bool = False) -> dict:
         state.last_checked_at = now
         state.updated_at = now
         if state.status != "failed":
-            state.status = "current" if state.version == CURRENT_MASTER_SCHEMA_VERSION and state.checksum == CURRENT_MASTER_SCHEMA_CHECKSUM else "outdated"
+            state.status = "current" if state.version == current_version and state.checksum == current_checksum else "outdated"
         db.commit()
     return {
         "version": state.version,
@@ -180,13 +190,13 @@ def master_migration_report(db: Session, *, persist: bool = False) -> dict:
         "checksum": state.checksum,
         "execution_ms": state.execution_ms,
         "application_version": state.application_version,
-        "current_version": CURRENT_MASTER_SCHEMA_VERSION,
-        "current_name": CURRENT_MASTER_SCHEMA_NAME,
-        "current_checksum": CURRENT_MASTER_SCHEMA_CHECKSUM,
+        "current_version": current_version,
+        "current_name": current_name,
+        "current_checksum": current_checksum,
         "status": state.status,
         "last_checked_at": state.last_checked_at,
         "applied_at": state.applied_at,
         "last_error": state.last_error,
         "notes": state.notes,
-        "is_current": state.version == CURRENT_MASTER_SCHEMA_VERSION and state.checksum == CURRENT_MASTER_SCHEMA_CHECKSUM and state.status == "current",
+        "is_current": state.version == current_version and state.checksum == current_checksum and state.status == "current",
     }

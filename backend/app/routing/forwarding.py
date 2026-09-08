@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.attachment_storage import read_attachment
 from app.core.encryption import decrypt_secret
 from app.communications.service import recipient_values
-from app.db.models import BackgroundJob, Communication, Department, Mailbox, RoutingAction, RoutingDecision, User
+from app.db.models import BackgroundJob, Communication, Department, Mailbox, RoutingAction, RoutingDecision, User, utcnow
 
 
 FORWARD_ACTION_TYPE = "forward"
@@ -227,21 +227,41 @@ def ensure_routing_action(
             Department.active.is_(True),
         )
     )
-    action = RoutingAction(
-        company_id=company_id,
-        communication_id=communication_id,
-        routing_decision_id=routing_decision_id,
-        department_id=department_id,
-        triggered_by_user_id=triggered_by_user_id,
-        action_type=FORWARD_ACTION_TYPE,
-        source=source,
-        destination_email=(department.destination_email if department else "") or "",
-        status="pending",
-        idempotency_key=key,
+    values = {
+        "company_id": company_id,
+        "communication_id": communication_id,
+        "routing_decision_id": routing_decision_id,
+        "department_id": department_id,
+        "triggered_by_user_id": triggered_by_user_id,
+        "action_type": FORWARD_ACTION_TYPE,
+        "source": source,
+        "destination_email": (department.destination_email if department else "") or "",
+        "status": "pending",
+        "idempotency_key": key,
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as dialect_insert
+    elif dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+    else:  # pragma: no cover - supported pilot databases use PostgreSQL/SQLite
+        action = RoutingAction(**values)
+        db.add(action)
+        db.flush()
+        return action
+    db.execute(
+        dialect_insert(RoutingAction)
+        .values(values)
+        .on_conflict_do_nothing(index_elements=["company_id", "idempotency_key"])
     )
-    db.add(action)
-    db.flush()
-    return action
+    return db.scalar(
+        select(RoutingAction).where(
+            RoutingAction.company_id == company_id,
+            RoutingAction.idempotency_key == key,
+        )
+    )
 
 
 def enqueue_forwarding_job(db: Session, action: RoutingAction) -> BackgroundJob | None:

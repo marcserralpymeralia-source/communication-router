@@ -1478,6 +1478,25 @@ class JobAttempt(Base):
     __table_args__ = (UniqueConstraint("job_id", "attempt_number"),)
 
 
+class WorkerHeartbeat(Base):
+    """Small tenant-scoped liveness record shared by web and worker processes."""
+
+    __tablename__ = "worker_heartbeats"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    worker_kind: Mapped[str] = mapped_column(String(40))
+    worker_id: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_type: Mapped[str | None] = mapped_column(String(120))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "worker_kind"),)
+
+
 class Alert(Base):
     __tablename__ = "alerts"
 

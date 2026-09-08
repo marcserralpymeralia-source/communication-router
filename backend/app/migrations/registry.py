@@ -1314,6 +1314,15 @@ def _apply_tenant_routing_evaluations(engine, dry_run: bool) -> list[str]:  # no
     return actions
 
 
+def _apply_tenant_worker_heartbeats(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import WorkerHeartbeat
+
+    if dry_run:
+        return ["CREATE TABLE worker_heartbeats (...)" ]
+    WorkerHeartbeat.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE worker_heartbeats"]
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1456,10 +1465,18 @@ TENANT_SCHEMA_MIGRATIONS = [
         ),
         upgrade=_apply_tenant_pre_pilot_controls,
     ),
+    MigrationSpec(
+        version="2026.09.08.3",
+        name="tenant worker heartbeats",
+        checksum=checksum_text("tenant", "worker_heartbeats", "worker_kind", "last_heartbeat_at"),
+        upgrade=_apply_tenant_worker_heartbeats,
+    ),
 ]
 
 # KIBAK starts from the clean baseline and only advances through KIBAK migrations.
-KIBAK_TENANT_SCHEMA_MIGRATIONS = [TENANT_SCHEMA_MIGRATIONS[-2], TENANT_SCHEMA_MIGRATIONS[-1]]
+KIBAK_TENANT_SCHEMA_MIGRATIONS = [
+    spec for spec in TENANT_SCHEMA_MIGRATIONS if spec.version in {"2026.09.08.1", "2026.09.08.2", "2026.09.08.3"}
+]
 
 MASTER_SCHEMA_MIGRATIONS = [
     MigrationSpec(

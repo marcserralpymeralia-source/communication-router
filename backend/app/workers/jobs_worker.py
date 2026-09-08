@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Mailbox, Order, ScoringSettings
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Mailbox, Order, ScoringSettings, WorkerHeartbeat
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
@@ -73,6 +73,36 @@ JOB_TYPES = {
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def touch_worker_heartbeat(db, company_id: int, *, status: str = "active", error: Exception | None = None) -> WorkerHeartbeat:
+    heartbeat = db.scalar(
+        select(WorkerHeartbeat).where(
+            WorkerHeartbeat.company_id == company_id,
+            WorkerHeartbeat.worker_kind == "jobs",
+        )
+    )
+    now = _now()
+    if heartbeat is None:
+        heartbeat = WorkerHeartbeat(
+            company_id=company_id,
+            worker_kind="jobs",
+            worker_id=_identity(),
+            status=status,
+            last_heartbeat_at=now,
+        )
+        db.add(heartbeat)
+    else:
+        heartbeat.worker_id = _identity()
+        heartbeat.status = status
+        heartbeat.last_heartbeat_at = now
+    if error is not None:
+        heartbeat.last_error_at = now
+        heartbeat.last_error_type = error.__class__.__name__
+        heartbeat.last_error_message = str(error)[:500]
+    heartbeat.updated_at = now
+    db.commit()
+    return heartbeat
 
 
 def _identity() -> str:
@@ -796,6 +826,7 @@ def _handle_tenant_jobs(
     processed_jobs = 0
     blocked_jobs = 0
     try:
+        touch_worker_heartbeat(db, tenant.company_id)
         schema_report = tenant_migration_report(db, tenant.company_id, persist=False)
         if (
             get_settings().app_slug.strip().lower() == "kibak"
@@ -869,6 +900,7 @@ def _handle_tenant_jobs(
                         },
                     )
                 except Exception as exc:  # noqa: BLE001
+                    touch_worker_heartbeat(db, tenant.company_id, status="error", error=exc)
                     logger.exception("Job fallido company=%s job=%s", job.company_id, job.job_type)
                     should_retry = job.attempt_count < (max(0, job.max_retries or 0) + 1) and (
                         bool(getattr(exc, "retryable", False)) or _is_retryable_exception(exc)
@@ -895,6 +927,11 @@ def _handle_tenant_jobs(
                         },
                     )
     finally:
+        if db.is_active:
+            try:
+                touch_worker_heartbeat(db, tenant.company_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("No se pudo actualizar heartbeat de jobs company=%s", tenant.company_id)
         db.close()
     return {
         "recovered": recovered_jobs,

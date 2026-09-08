@@ -14,6 +14,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 
 WORKDIR /app
 COPY backend /app/backend
+COPY docker-compose.yml ./docker-compose.yml
 COPY docs ./docs
 COPY README.md ./README.md
 COPY ARCHITECTURE.md ./ARCHITECTURE.md

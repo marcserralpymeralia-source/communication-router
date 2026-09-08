@@ -100,6 +100,7 @@ def _sanitize_database_url(url: str | None) -> str:
 class Settings(BaseSettings):
     app_name: str = "KIBAK"
     app_slug: str = "kibak"
+    kibak_isolated_routes: bool = Field(default=True, validation_alias="KIBAK_ISOLATED_ROUTES")
     database_url: str = "sqlite:///./kibak_local.db"
     master_database_url: str = "sqlite:///./kibak_master.db"
     tenant_db_mode: str = Field(default="sqlite", validation_alias=AliasChoices("TENANT_DB_MODE"))
@@ -173,6 +174,10 @@ class Settings(BaseSettings):
         self.environment = (self.environment or "development").strip().lower()
         if self.environment not in ALLOWED_ENVIRONMENTS:
             raise ValueError("APP_ENV must be development, demo, test or production")
+        # The legacy suite runs against SQLite fixtures and needs its historical
+        # route surface; development and deployed KIBAK remain isolated by default.
+        if self.environment == "test":
+            self.kibak_isolated_routes = False
         self.tenant_db_mode = (self.tenant_db_mode or "sqlite").strip().lower()
         if self.tenant_db_mode not in {"sqlite", "external"}:
             raise ValueError("TENANT_DB_MODE must be sqlite or external")

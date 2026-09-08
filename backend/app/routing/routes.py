@@ -5,13 +5,14 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth.dependencies import require_tenant_role
 from app.core.templating import templates
 from app.db.models import (
     Mailbox,
+    RoutingEvaluationSet,
     RoutingEvaluationCase,
     RoutingEvaluationRun,
     RoutingEvaluationResult,
@@ -24,7 +25,6 @@ from app.routing.evaluations import (
     create_evaluation_set,
     evaluation_context,
     get_evaluation_set,
-    list_evaluation_sets,
     playground_analysis,
     run_evaluation,
     seed_demo_evaluation_set,
@@ -43,6 +43,59 @@ from app.tenancy.database import get_tenant_db
 
 
 router = APIRouter(prefix="/routing", tags=["routing-lab"])
+EVALUATION_PAGE_SIZE = 25
+
+
+def _page_params(request: Request) -> tuple[int, int]:
+    try:
+        page = max(int(request.query_params.get("page", "1")), 1)
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = min(max(int(request.query_params.get("page_size", str(EVALUATION_PAGE_SIZE))), 1), 100)
+    except (TypeError, ValueError):
+        page_size = EVALUATION_PAGE_SIZE
+    return page, page_size
+
+
+def _pagination(page: int, page_size: int, total: int) -> dict[str, int | bool]:
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": max((total + page_size - 1) // page_size, 1),
+        "has_previous": page > 1,
+        "has_next": page * page_size < total,
+    }
+
+
+def _run_simulation(db: Session, company_id: int, run_id: int, threshold: float) -> dict[str, float | int]:
+    threshold = min(max(float(threshold), 0.0), 1.0)
+    candidate = (
+        RoutingEvaluationResult.company_id == company_id,
+        RoutingEvaluationResult.run_id == run_id,
+        RoutingEvaluationResult.predicted_department_id.is_not(None),
+        RoutingEvaluationResult.requires_review.is_(False),
+        RoutingEvaluationResult.confidence >= threshold,
+    )
+    false_route = (*candidate, RoutingEvaluationResult.expected_department_id != RoutingEvaluationResult.predicted_department_id)
+    critical_false = (*false_route, RoutingEvaluationResult.criticality == "critical")
+    candidate_count = db.scalar(select(func.count(RoutingEvaluationResult.id)).where(*candidate)) or 0
+    false_count = db.scalar(select(func.count(RoutingEvaluationResult.id)).where(*false_route)) or 0
+    critical_false_count = db.scalar(select(func.count(RoutingEvaluationResult.id)).where(*critical_false)) or 0
+    total = db.scalar(
+        select(func.count(RoutingEvaluationResult.id)).where(
+            RoutingEvaluationResult.company_id == company_id,
+            RoutingEvaluationResult.run_id == run_id,
+        )
+    ) or 0
+    return {
+        "threshold": threshold,
+        "candidate_count": candidate_count,
+        "automation_rate": round(candidate_count / total, 4) if total else 0.0,
+        "false_auto_route_count": false_count,
+        "critical_false_auto_routes": critical_false_count,
+    }
 
 
 def _redirect(path: str, *, error: str | None = None, message: str | None = None) -> RedirectResponse:
@@ -177,9 +230,20 @@ def evaluations_page(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(require_tenant_role(*PLAYGROUND_ROLES)),
 ):
+    page, page_size = _page_params(request)
+    total_sets = db.scalar(select(func.count(RoutingEvaluationSet.id)).where(RoutingEvaluationSet.company_id == user.company_id)) or 0
+    sets = list(
+        db.scalars(
+            select(RoutingEvaluationSet)
+            .where(RoutingEvaluationSet.company_id == user.company_id)
+            .order_by(RoutingEvaluationSet.active.desc(), RoutingEvaluationSet.name)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    )
     return templates.TemplateResponse(
         "routing/evaluations.html",
-        {"request": request, "user": user, "title": "Evaluation Lab", "sets": list_evaluation_sets(db, user.company_id), "error": request.query_params.get("error"), "message": request.query_params.get("message")},
+        {"request": request, "user": user, "title": "Evaluation Lab", "sets": sets, "pagination": _pagination(page, page_size, total_sets), "error": request.query_params.get("error"), "message": request.query_params.get("message")},
     )
 
 
@@ -218,14 +282,17 @@ def evaluation_set_page(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(require_tenant_role(*PLAYGROUND_ROLES)),
 ):
+    page, page_size = _page_params(request)
     evaluation_set = get_evaluation_set(db, user.company_id, set_id)
     if evaluation_set is None:
         return _redirect("/routing/evaluations", error="Conjunto no encontrado.")
-    runs = db.scalars(select(RoutingEvaluationRun).where(RoutingEvaluationRun.company_id == user.company_id, RoutingEvaluationRun.evaluation_set_id == set_id).order_by(RoutingEvaluationRun.id.desc())).all()
-    cases = db.scalars(select(RoutingEvaluationCase).where(RoutingEvaluationCase.company_id == user.company_id, RoutingEvaluationCase.evaluation_set_id == set_id).order_by(RoutingEvaluationCase.id)).all()
+    total_runs = db.scalar(select(func.count(RoutingEvaluationRun.id)).where(RoutingEvaluationRun.company_id == user.company_id, RoutingEvaluationRun.evaluation_set_id == set_id)) or 0
+    total_cases = db.scalar(select(func.count(RoutingEvaluationCase.id)).where(RoutingEvaluationCase.company_id == user.company_id, RoutingEvaluationCase.evaluation_set_id == set_id)) or 0
+    runs = db.scalars(select(RoutingEvaluationRun).where(RoutingEvaluationRun.company_id == user.company_id, RoutingEvaluationRun.evaluation_set_id == set_id).order_by(RoutingEvaluationRun.id.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+    cases = db.scalars(select(RoutingEvaluationCase).where(RoutingEvaluationCase.company_id == user.company_id, RoutingEvaluationCase.evaluation_set_id == set_id).order_by(RoutingEvaluationCase.id).offset((page - 1) * page_size).limit(page_size)).all()
     return templates.TemplateResponse(
         "routing/evaluation_set.html",
-        {"request": request, "user": user, "title": evaluation_set.name, "evaluation_set": evaluation_set, "cases": cases, "runs": runs, "error": request.query_params.get("error"), "message": request.query_params.get("message")},
+        {"request": request, "user": user, "title": evaluation_set.name, "evaluation_set": evaluation_set, "cases": cases, "runs": runs, "cases_pagination": _pagination(page, page_size, total_cases), "runs_pagination": _pagination(page, page_size, total_runs), "error": request.query_params.get("error"), "message": request.query_params.get("message")},
     )
 
 
@@ -359,7 +426,8 @@ def evaluation_run_page(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(require_tenant_role(*PLAYGROUND_ROLES)),
 ):
-    run = db.scalar(select(RoutingEvaluationRun).options(selectinload(RoutingEvaluationRun.results)).where(RoutingEvaluationRun.company_id == user.company_id, RoutingEvaluationRun.id == run_id))
+    page, page_size = _page_params(request)
+    run = db.scalar(select(RoutingEvaluationRun).where(RoutingEvaluationRun.company_id == user.company_id, RoutingEvaluationRun.id == run_id))
     if run is None:
         return _redirect("/routing/evaluations", error="Run no encontrado.")
     try:
@@ -367,10 +435,12 @@ def evaluation_run_page(
     except (TypeError, ValueError):
         threshold = 0.90
     metrics = json.loads(run.metrics_json or "{}")
-    simulation = simulate_threshold(run.results, threshold)
+    total_results = db.scalar(select(func.count(RoutingEvaluationResult.id)).where(RoutingEvaluationResult.company_id == user.company_id, RoutingEvaluationResult.run_id == run_id)) or 0
+    results = db.scalars(select(RoutingEvaluationResult).where(RoutingEvaluationResult.company_id == user.company_id, RoutingEvaluationResult.run_id == run_id).order_by(RoutingEvaluationResult.id).offset((page - 1) * page_size).limit(page_size)).all()
+    simulation = _run_simulation(db, user.company_id, run_id, threshold)
     return templates.TemplateResponse(
         "routing/evaluation_run.html",
-        {"request": request, "user": user, "title": f"Run #{run.id}", "run": run, "metrics": metrics, "simulation": simulation, "threshold": threshold, "context": json.loads(run.context_snapshot_json or "{}"), "results": run.results},
+        {"request": request, "user": user, "title": f"Run #{run.id}", "run": run, "metrics": metrics, "simulation": simulation, "threshold": threshold, "context": json.loads(run.context_snapshot_json or "{}"), "results": results, "pagination": _pagination(page, page_size, total_results)},
     )
 
 

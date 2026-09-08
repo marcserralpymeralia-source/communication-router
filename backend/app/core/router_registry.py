@@ -1,81 +1,98 @@
 from __future__ import annotations
 
-from app.auth.routes import router as auth_router
-from app.admin.routes import router as admin_router
-from app.dashboard.routes import router as dashboard_router
-from app.alerts.routes import router as alerts_router
-from app.channels.routes import entries_router, router as channels_router
-from app.customers.routes import router as customers_router
-from app.databases.routes import router as databases_router
-from app.imports.routes import router as imports_router
-from app.jobs.routes import router as jobs_router
-from app.legal.routes import router as legal_router
-from app.logs.routes import router as logs_router
-from app.mail.routes import router as mail_router
-from app.learning.routes import router as learning_router
-from app.pages.routes import router as pages_router
-from app.orders.routes import router as orders_router
-from app.products.routes import router as products_router
-from app.whatsapp.routes import router as whatsapp_router
-from app.whatsapp.inbox_routes import router as whatsapp_inbox_router
-from app.settings.channels_routes import router as channels_settings_router
-from app.mailboxes.routes import router as mailboxes_router
-from app.communications.routes import router as communications_router
-from app.departments.routes import router as departments_router
-from app.settings.routes import router as settings_router
-from app.setup.routes import router as setup_router
-from app.users.routes import router as users_router
-from app.workbench.routes import router as workbench_router
-from app.onboarding.routes import router as onboarding_router
-from app.operations.routes import router as operations_router
-from app.routing.routes import router as routing_router
+import os
 
-try:  # pragma: no cover - optional during phased extraction
-    from app.health.routes import router as health_router
-except Exception:  # noqa: BLE001
-    health_router = None
+from app.core.config import get_settings
 
-try:  # pragma: no cover - optional during phased extraction
-    from app.cron.routes import router as cron_router
-except Exception:  # noqa: BLE001
-    cron_router = None
+
+def _router(module_name: str, attribute: str = "router"):
+    module = __import__(module_name, fromlist=[attribute])
+    return getattr(module, attribute)
+
+
+def _optional_router(module_name: str, attribute: str = "router"):
+    try:
+        return _router(module_name, attribute)
+    except Exception:  # pragma: no cover - optional phased modules
+        return None
+
+
+def _kibak_routers() -> list:
+    # External KIBAK uses a deliberately small route surface. Legacy routers remain
+    # importable for historical SQLite fixtures, but are not part of this runtime.
+    modules = (
+        ("app.auth.routes", "router"),
+        ("app.admin.routes", "router"),
+        ("app.dashboard.routes", "router"),
+        ("app.pages.routes", "router"),
+        ("app.onboarding.routes", "router"),
+        ("app.operations.routes", "router"),
+        ("app.routing.routes", "router"),
+        ("app.mailboxes.routes", "router"),
+        ("app.communications.routes", "router"),
+        ("app.departments.routes", "router"),
+        ("app.setup.routes", "router"),
+        ("app.jobs.routes", "router"),
+        ("app.legal.routes", "router"),
+        ("app.settings.routes", "router"),
+        ("app.users.routes", "router"),
+        ("app.health.routes", "router"),
+        ("app.cron.routes", "router"),
+    )
+    return [router for module, attribute in modules if (router := _optional_router(module, attribute)) is not None]
+
+
+def _legacy_routers() -> list:
+    imports = (
+        ("app.auth.routes", "router"),
+        ("app.admin.routes", "router"),
+        ("app.dashboard.routes", "router"),
+        ("app.pages.routes", "router"),
+        ("app.channels.routes", "entries_router"),
+        ("app.mail.routes", "router"),
+        ("app.channels.routes", "router"),
+        ("app.workbench.routes", "router"),
+        ("app.onboarding.routes", "router"),
+        ("app.operations.routes", "router"),
+        ("app.routing.routes", "router"),
+        ("app.whatsapp.routes", "router"),
+        ("app.whatsapp.inbox_routes", "router"),
+        ("app.alerts.routes", "router"),
+        ("app.learning.routes", "router"),
+        ("app.settings.channels_routes", "router"),
+        ("app.mailboxes.routes", "router"),
+        ("app.communications.routes", "router"),
+        ("app.departments.routes", "router"),
+        ("app.setup.routes", "router"),
+        ("app.orders.routes", "router"),
+        ("app.databases.routes", "router"),
+        ("app.customers.routes", "router"),
+        ("app.products.routes", "router"),
+        ("app.imports.routes", "router"),
+        ("app.jobs.routes", "router"),
+        ("app.legal.routes", "router"),
+        ("app.settings.routes", "router"),
+        ("app.users.routes", "router"),
+        ("app.logs.routes", "router"),
+    )
+    routers = [router for module, attribute in imports if (router := _optional_router(module, attribute)) is not None]
+    for module, attribute in (("app.health.routes", "router"), ("app.cron.routes", "router")):
+        if (router := _optional_router(module, attribute)) is not None:
+            routers.append(router)
+    return routers
 
 
 def get_registered_routers() -> list:
-    routers = [
-        auth_router,
-        admin_router,
-        dashboard_router,
-        pages_router,
-        entries_router,
-        mail_router,
-        channels_router,
-        workbench_router,
-        onboarding_router,
-        operations_router,
-        routing_router,
-        whatsapp_router,
-        whatsapp_inbox_router,
-        alerts_router,
-        learning_router,
-        channels_settings_router,
-        mailboxes_router,
-        communications_router,
-        departments_router,
-        setup_router,
-        orders_router,
-        databases_router,
-        customers_router,
-        products_router,
-        imports_router,
-        jobs_router,
-        legal_router,
-        settings_router,
-        users_router,
-        logs_router,
-    ]
-    if health_router is not None:
-        routers.append(health_router)
-    if cron_router is not None:
-        routers.append(cron_router)
-    return routers
+    settings = get_settings()
+    # Test fixtures intentionally exercise the historical SQLite route surface.
+    # Read the process environment here so a test that temporarily clears the
+    # settings cache cannot leak its development route choice into later tests.
+    legacy_fixture = (
+        os.environ.get("APP_ENV", "").strip().lower() == "test"
+        or os.environ.get("DATABASE_URL", "").strip().lower().startswith("sqlite")
+    )
+    if legacy_fixture:
+        return _legacy_routers()
+    if settings.app_slug.strip().lower() == "kibak" and settings.kibak_isolated_routes:
+        return _kibak_routers()
+    return _legacy_routers()

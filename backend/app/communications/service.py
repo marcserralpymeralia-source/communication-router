@@ -5,7 +5,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.attachment_extraction import extract_attachment_text
@@ -69,18 +70,13 @@ def get_communication(db: Session, company_id: int, communication_id: int) -> Co
     )
 
 
-def list_communications(
-    db: Session,
+def _communication_filters(
     company_id: int,
     *,
-    limit: int = 50,
-    offset: int = 0,
     routing_status: str | None = None,
     workbench_filter: str | None = None,
     search: str | None = None,
-) -> list[Communication]:
-    safe_limit = max(min(int(limit or 50), 100), 1)
-    safe_offset = max(int(offset or 0), 0)
+) -> list:
     filters = [Communication.company_id == company_id]
     if routing_status and routing_status in ROUTING_STATUSES:
         filters.append(Communication.routing_status == routing_status)
@@ -156,14 +152,52 @@ def list_communications(
                     failed_action,
                 )
             )
+    return filters
+
+
+def list_communications(
+    db: Session,
+    company_id: int,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    routing_status: str | None = None,
+    workbench_filter: str | None = None,
+    search: str | None = None,
+) -> list[Communication]:
+    safe_limit = max(min(int(limit or 50), 100), 1)
+    safe_offset = max(int(offset or 0), 0)
     return db.scalars(
         select(Communication)
-        .where(*filters)
+        .where(*_communication_filters(company_id, routing_status=routing_status, workbench_filter=workbench_filter, search=search))
         .options(selectinload(Communication.attachments))
         .order_by(Communication.received_at.desc(), Communication.id.desc())
         .limit(safe_limit)
         .offset(safe_offset)
     ).all()
+
+
+def count_communications(
+    db: Session,
+    company_id: int,
+    *,
+    routing_status: str | None = None,
+    workbench_filter: str | None = None,
+    search: str | None = None,
+) -> int:
+    return int(
+        db.scalar(
+            select(func.count(Communication.id)).where(
+                *_communication_filters(
+                    company_id,
+                    routing_status=routing_status,
+                    workbench_filter=workbench_filter,
+                    search=search,
+                )
+            )
+        )
+        or 0
+    )
 
 
 def _attachment_from_payload(
@@ -285,8 +319,27 @@ def create_or_update_communication_from_email(
             created_at=now,
             **values,
         )
-        db.add(communication)
-        db.flush()
+        try:
+            # The unique constraint is the authority when two workers ingest the same message concurrently.
+            with db.begin_nested():
+                db.add(communication)
+                db.flush()
+        except IntegrityError:
+            communication = db.scalar(
+                select(Communication).where(
+                    Communication.company_id == company_id,
+                    Communication.mailbox_id == mailbox_id,
+                    Communication.provider == normalized_provider,
+                    Communication.external_message_id == external_message_id,
+                )
+            )
+            if communication is None:
+                raise
+            for key, value in values.items():
+                if value is not None:
+                    setattr(communication, key, value)
+            if communication.processing_status != "processed" or processing_status == "error":
+                communication.processing_status = processing_status
     else:
         for key, value in values.items():
             if value is not None:

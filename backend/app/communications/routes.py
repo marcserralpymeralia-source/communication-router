@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
-from app.communications.service import WORKBENCH_FILTERS, get_communication, list_communications, recipient_values, serialize_communication
+from app.communications.service import WORKBENCH_FILTERS, count_communications, get_communication, list_communications, recipient_values, serialize_communication
 from app.core.templating import templates
+from app.core.pagination import normalize_page
 from app.db.models import Department, Mailbox, RoutingAction, RoutingCorrection, RoutingDecision, User
 from app.master.service import TenantUser
 from app.routing.auto import enqueue_forwarding_for_decision
@@ -227,6 +228,8 @@ def _routing_redirect(request: Request, communication_id: int, *, error: str | N
 @router.get("/workbench")
 def communications_workbench(
     request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25),
     status: str = Query("all"),
     q: str = Query("", max_length=120),
     db: Session = Depends(get_tenant_db),
@@ -235,19 +238,27 @@ def communications_workbench(
     status_value = status if isinstance(status, str) else "all"
     search_value = q if isinstance(q, str) else ""
     selected_status = status_value if status_value in WORKBENCH_FILTERS else "all"
+    page, page_size = normalize_page(page, page_size)
+    total = count_communications(
+        db,
+        user.company_id,
+        workbench_filter=selected_status,
+        search=search_value,
+    )
     items = list_communications(
         db,
         user.company_id,
-        limit=100,
+        limit=page_size,
+        offset=(page - 1) * page_size,
         workbench_filter=selected_status,
         search=search_value,
     )
     counts = {
-        key: len(list_communications(db, user.company_id, limit=100, workbench_filter=key, search=search_value))
+        key: count_communications(db, user.company_id, workbench_filter=key, search=search_value)
         for key, _label in WORKBENCH_FILTER_OPTIONS
         if key != "all"
     }
-    counts["all"] = len(list_communications(db, user.company_id, limit=100, workbench_filter="all", search=search_value))
+    counts["all"] = count_communications(db, user.company_id, workbench_filter="all", search=search_value)
     return templates.TemplateResponse(
         "communications/workbench.html",
         {
@@ -260,6 +271,17 @@ def communications_workbench(
             "search": search_value,
             "filter_options": WORKBENCH_FILTER_OPTIONS,
             "forwarding_status_labels": FORWARDING_STATUS_LABELS,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_items": total,
+                "total_pages": (total + page_size - 1) // page_size if total else 0,
+                "has_previous": page > 1,
+                "has_next": page * page_size < total,
+                "start_item": (page - 1) * page_size + 1 if total else 0,
+                "end_item": min(page * page_size, total),
+                "allowed_page_sizes": (10, 25, 50, 100),
+            },
         },
     )
 
