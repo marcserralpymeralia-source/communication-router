@@ -505,7 +505,7 @@ def _common_candidates(email_address: str, domain: str) -> tuple[list[MailEndpoi
         _endpoint("smtp", f"smtp.{domain}", 587, "starttls", "common_pattern"),
         _endpoint("smtp", f"mail.{domain}", 587, "starttls", "common_pattern"),
     ]
-    public = [candidate for candidate in candidates if _host_is_public(candidate.host)]
+    public = [candidate for candidate in candidates if _host_is_public_or_unresolved(candidate.host)]
     return [candidate for candidate in public if candidate.protocol in {"imap", "pop3"}], [candidate for candidate in public if candidate.protocol == "smtp"]
 
 
@@ -658,10 +658,26 @@ def _public_endpoints(endpoints: list[MailEndpoint]) -> list[MailEndpoint]:
     host_status: dict[str, bool] = {}
     for endpoint in endpoints:
         if endpoint.host not in host_status:
-            host_status[endpoint.host] = _host_is_public(endpoint.host)
+            host_status[endpoint.host] = _host_is_public_or_unresolved(endpoint.host)
         if host_status[endpoint.host]:
             result.append(endpoint)
     return result
+
+
+def _host_is_public_or_unresolved(host: str) -> bool:
+    """Allow unresolved public hostnames while rejecting resolved private hosts."""
+
+    if not _safe_host(host) or host.lower().rstrip(".") in {"localhost", "localhost.localdomain"} or host.lower().endswith(".local"):
+        return False
+    try:
+        addresses = {
+            info[4][0]
+            for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+            if info[4]
+        }
+    except (OSError, socket.gaierror):
+        return True
+    return bool(addresses) and all(_public_ip(address) for address in addresses)
 
 
 def _username_variants(email_address: str, configured: str) -> tuple[str, ...]:

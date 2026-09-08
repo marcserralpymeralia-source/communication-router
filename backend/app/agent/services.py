@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.agent.platform import UnifiedOrderPipelineService, _parse_positive_quantity
 from app.orders.scoring import calculate_order_score
 from app.channels.service import get_or_create_channel
+from app.core.storage import resolve_temp_storage_dir
 from app.db.models import Company, Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
 from app.messages.service import NormalizedMessage, persist_normalized_message
 from app.orders.state import ORDER_STATE
@@ -444,7 +445,7 @@ class MockAgentService:
         self.scoring = ScoringService()
 
     def _create_mock_pdf(self, order_key: str) -> Path:
-        storage_dir = Path(__file__).resolve().parents[2] / "storage" / "attachments"
+        storage_dir = resolve_temp_storage_dir("attachments")
         storage_dir.mkdir(parents=True, exist_ok=True)
         path = storage_dir / f"{order_key}.pdf"
         if path.exists():

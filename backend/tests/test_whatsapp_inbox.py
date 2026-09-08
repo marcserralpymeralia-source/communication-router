@@ -133,11 +133,11 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn("Buzón de WhatsApp", response.text)
         self.assertIn("Contactos", response.text)
         self.assertIn("Necesitamos confirmar la entrega.", response.text)
-        self.assertIn('href="/whatsapp/inbox"', response.text)
-        self.assertIn("Buzón de correo", response.text)
+        self.assertIn('action="/whatsapp/inbox"', response.text)
+        self.assertIn("Dashboard", response.text)
         self.assertIn('name="files"', response.text)
         self.assertEqual(response.text.count('href="/history"'), 1)
-        self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)
+        self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 0)
 
     def test_inactive_channel_is_not_available(self):
         fixture = build_performance_fixture("small")

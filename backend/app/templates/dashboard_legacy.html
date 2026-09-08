@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_filter, icon_plus %}
+{% set title = "Bandeja" %}
+{% block content %}
+{% include "dashboard/_workbench.html" %}
+{% include "components/workbench_detail_modal.html" %}
+{% endblock %}
+{% block page_scripts %}<script src="{{ asset_url('js/workbench-dashboard.js') }}" defer></script>{% endblock %}

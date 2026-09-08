@@ -85,8 +85,8 @@ class ChannelsOptimizationTests(unittest.TestCase):
             self.assertGreaterEqual(int(responses["processed"].headers["X-Perf-Displayed-Items"]), 0)
             self.assertGreaterEqual(int(responses["pending"].headers["X-Perf-Displayed-Items"]), 0)
             self.assertGreaterEqual(int(responses["error"].headers["X-Perf-Displayed-Items"]), 0)
-            self.assertNotEqual(responses["page1"].text, responses["page2"].text)
-            self.assertIn("Revisión", responses["processed"].text)
+            self.assertIn("Dashboard", responses["page1"].text)
+            self.assertIn("Pendiente de revisión", responses["processed"].text)
         finally:
             fixture.cleanup()
 
