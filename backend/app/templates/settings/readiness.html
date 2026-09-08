@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-section">
+  <header class="page-section-header"><div><span class="kibak-eyebrow">KIBAK</span><h2>Preparación del sistema</h2><p>Comprobaciones tenant-scoped antes de activar automatizaciones.</p></div><a class="button secondary" href="/settings#automation">Volver a configuración</a></header>
+  <section class="panel readiness-panel">
+    <div class="readiness-summary-line"><strong>{{ 'Listo para revisión' if readiness.ready else 'Todavía no preparado' }}</strong><span>{{ readiness.failures }} bloqueos · {{ readiness.warnings }} avisos</span></div>
+    <div class="readiness-list">{% for check in readiness.checks %}<article class="readiness-row readiness-{{ check.status|lower }}"><strong>{{ check.label }}</strong><span>{{ check.status }}</span><p>{{ check.message }}</p>{% if check.action_url %}<a href="{{ check.action_url }}">Revisar</a>{% endif %}</article>{% endfor %}</div>
+  </section>
+</section>
+{% endblock %}

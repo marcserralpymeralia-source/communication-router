@@ -4,7 +4,7 @@ from datetime import date
 from urllib.parse import urlsplit, urlunsplit
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -32,6 +32,12 @@ from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job, execute_job_inline, job_payload
 from app.tenancy.database import get_tenant_db
 from app.tenancy.migrations import tenant_migration_report
+from app.routing.policy import (
+    RoutingPolicyError,
+    build_kibak_readiness,
+    load_routing_policy,
+    parse_policy_form,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +206,7 @@ def _kibak_settings_context(request: Request, db: Session, user: TenantUser) -> 
     ) or 0
     provider = (llm.provider if llm else "disabled") or "disabled"
     model = (llm.classification_model if llm else "") or "Sin modelo configurado"
+    policy = load_routing_policy(db, user.company_id)
     return {
         "request": request,
         "user": user,
@@ -211,9 +218,9 @@ def _kibak_settings_context(request: Request, db: Session, user: TenantUser) -> 
         "llm_configured": bool(llm and llm.api_key_encrypted and provider != "disabled"),
         "automation": {
             "agent_enabled": bool(llm and llm.agent_enabled),
-            "auto_routing_enabled": bool(llm and llm.auto_routing_enabled),
-            "auto_forwarding_enabled": bool(llm and llm.auto_forwarding_enabled),
+            **policy.as_dict(),
         },
+        "readiness": build_kibak_readiness(db, user.company_id),
         "counts": {
             "mailboxes": mailbox_count,
             "departments": department_count,
@@ -942,6 +949,61 @@ def reset_company_default(db: Session = Depends(get_tenant_db), user: TenantUser
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="company.reset_default", entity_type="company", entity_id=company.id, message="Configuracion general restaurada a valores por defecto")
     return RedirectResponse("/settings#general", status_code=303)
+
+
+@router.post("/automation")
+async def update_kibak_automation(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    """Update the tenant routing policy, with a hard guard before auto-forwarding."""
+    if get_settings().app_slug.strip().lower() != "kibak":
+        return JSONResponse({"ok": False, "message": "No encontrado."}, status_code=404)
+    if user.role.name not in {"Administrador", "Superadmin"}:
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede cambiar la automatización."}, status_code=403)
+    data = await request_data(request)
+    current = load_routing_policy(db, user.company_id)
+    try:
+        desired = parse_policy_form(data, current)
+        settings = get_or_create_settings(db, LLMSettings, user.company_id)
+        settings.auto_routing_enabled = desired.auto_routing_enabled
+        settings.auto_forwarding_enabled = desired.auto_forwarding_enabled
+        settings.simulation_mode = desired.simulation_mode
+        settings.routing_review_threshold = desired.review_threshold
+        settings.routing_auto_threshold = desired.auto_threshold
+        if desired.auto_forwarding_enabled:
+            readiness = build_kibak_readiness(db, user.company_id)
+            blocking = [item["message"] for item in readiness["checks"] if item["status"] == "FAIL"]
+            if blocking:
+                db.rollback()
+                payload = {"ok": False, "message": "El reenvío automático no está preparado.", "checks": blocking}
+                return JSONResponse(payload, status_code=409) if "application/json" in (request.headers.get("accept") or "") else RedirectResponse("/settings#automation", status_code=303)
+        settings.updated_by = resolve_updated_by_id(db, user)
+        settings.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="routing.policy.updated",
+            entity_type="llm_settings",
+            entity_id=settings.id,
+            message="Política de routing actualizada.",
+            metadata={"policy": desired.as_dict()},
+        )
+    except RoutingPolicyError as exc:
+        db.rollback()
+        payload = {"ok": False, "message": str(exc)}
+        return JSONResponse(payload, status_code=422) if "application/json" in (request.headers.get("accept") or "") else RedirectResponse("/settings#automation", status_code=303)
+    payload = {"ok": True, "policy": load_routing_policy(db, user.company_id).as_dict()}
+    return JSONResponse(payload) if "application/json" in (request.headers.get("accept") or "") else RedirectResponse("/settings#automation", status_code=303)
+
+
+@router.get("/readiness")
+def kibak_readiness_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if get_settings().app_slug.strip().lower() != "kibak":
+        raise HTTPException(status_code=404, detail="No encontrado")
+    readiness = build_kibak_readiness(db, user.company_id)
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse(readiness)
+    return templates.TemplateResponse("settings/readiness.html", {"request": request, "user": user, "title": "Preparación del sistema", "readiness": readiness})
 
 
 @router.post("/{section}")

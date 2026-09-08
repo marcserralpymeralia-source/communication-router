@@ -4,7 +4,7 @@ import json
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -32,6 +32,13 @@ from app.routing.evaluations import (
     update_evaluation_case,
     update_evaluation_set,
 )
+from app.routing.policy import build_kibak_readiness, load_routing_policy
+from app.routing.organization_config import (
+    OrganizationConfigError,
+    apply_organization_config,
+    export_organization_config,
+    preview_organization_config,
+)
 from app.tenancy.database import get_tenant_db
 
 
@@ -49,9 +56,56 @@ async def _form(request: Request) -> dict[str, str]:
     return {key: str(value) for key, value in form.multi_items() if not hasattr(value, "filename")}
 
 
+async def _json_payload(request: Request):
+    if "application/json" in (request.headers.get("content-type") or ""):
+        return await request.json()
+    data = await _form(request)
+    try:
+        return json.loads(data.get("payload", "{}"))
+    except json.JSONDecodeError as exc:
+        raise OrganizationConfigError("El contenido no es JSON válido.") from exc
+
+
 def _context_view(db: Session, user: TenantUser) -> dict:
     context = evaluation_context(db, user.company_id)
     return {"raw": json.dumps(context, ensure_ascii=False, indent=2, default=str), "departments": context.get("departments", [])}
+
+
+@router.get("/organization/export")
+def organization_export(
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(require_tenant_role(*PLAYGROUND_ROLES)),
+):
+    return JSONResponse(export_organization_config(db, user.company_id), headers={"Content-Disposition": "attachment; filename=kibak-organization-v1.json"})
+
+
+@router.post("/organization/import/validate")
+async def organization_import_validate(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(require_tenant_role("Administrador", "Superadmin")),
+):
+    try:
+        payload = await _json_payload(request)
+        return JSONResponse({"ok": True, "preview": preview_organization_config(db, user.company_id, payload)})
+    except OrganizationConfigError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+
+@router.post("/organization/import/apply")
+async def organization_import_apply(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(require_tenant_role("Administrador", "Superadmin")),
+):
+    try:
+        payload = await _json_payload(request)
+        result = apply_organization_config(db, user.company_id, payload)
+        db.commit()
+        return JSONResponse({"ok": True, "result": result})
+    except OrganizationConfigError as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
 
 
 @router.get("/playground")
@@ -309,7 +363,7 @@ def evaluation_run_page(
     if run is None:
         return _redirect("/routing/evaluations", error="Run no encontrado.")
     try:
-        threshold = float(request.query_params.get("threshold", "0.90"))
+        threshold = float(request.query_params.get("threshold", str(load_routing_policy(db, user.company_id).auto_threshold)))
     except (TypeError, ValueError):
         threshold = 0.90
     metrics = json.loads(run.metrics_json or "{}")
@@ -355,7 +409,13 @@ def quality_page(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(require_tenant_role(*PLAYGROUND_ROLES)),
 ):
-    runs = db.scalars(select(RoutingEvaluationRun).where(RoutingEvaluationRun.company_id == user.company_id).order_by(RoutingEvaluationRun.id.desc()).limit(12)).all()
+    runs = db.scalars(select(RoutingEvaluationRun).options(selectinload(RoutingEvaluationRun.results)).where(RoutingEvaluationRun.company_id == user.company_id).order_by(RoutingEvaluationRun.id.desc()).limit(12)).all()
     latest = runs[0] if runs else None
     metrics = json.loads(latest.metrics_json or "{}") if latest else {}
-    return templates.TemplateResponse("routing/quality.html", {"request": request, "user": user, "title": "Calidad de RoutingAgent", "runs": runs, "latest": latest, "metrics": metrics})
+    policy = load_routing_policy(db, user.company_id)
+    try:
+        threshold = min(max(float(request.query_params.get("threshold", policy.auto_threshold)), 0), 1)
+    except (TypeError, ValueError):
+        threshold = policy.auto_threshold
+    impact = simulate_threshold(latest.results, threshold) if latest else None
+    return templates.TemplateResponse("routing/quality.html", {"request": request, "user": user, "title": "Calidad de RoutingAgent", "runs": runs, "latest": latest, "metrics": metrics, "threshold": threshold, "impact": impact, "readiness": build_kibak_readiness(db, user.company_id)})

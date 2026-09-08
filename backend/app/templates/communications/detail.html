@@ -114,7 +114,7 @@
 
       {% if forward_action %}
         <div class="communication-forwarding">
-          <div class="communication-subsection-heading"><h4>Derivación</h4><span class="badge {% if forward_action.status == 'failed' %}status-error{% elif forward_action.status == 'sent' %}status-confirmed{% else %}status-pending{% endif %}">{{ forwarding_status_labels.get(forward_action.status, forward_action.status) }}</span></div>
+          <div class="communication-subsection-heading"><h4>Derivación</h4><span class="badge {% if forward_action.status == 'failed' %}status-error{% elif forward_action.status in ['sent', 'simulated'] %}status-confirmed{% else %}status-pending{% endif %}">{{ forwarding_status_labels.get(forward_action.status, forward_action.status) }}</span></div>
           <span class="communication-secondary">Destino: {{ row.final_department.name if row.final_department else "Departamento seleccionado" }}{% if forward_action.destination_email %} · {{ forward_action.destination_email }}{% endif %}</span>
           {% if forward_action.error_message %}<span class="status-error">No se pudo completar la derivación. Requiere revisión.</span>{% endif %}
         </div>

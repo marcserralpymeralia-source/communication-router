@@ -15,12 +15,12 @@ from app.routing.forwarding import (
     _valid_email,
 )
 from app.routing.service import (
-    DEFAULT_ROUTING_THRESHOLDS,
     RoutingValidationError,
     analyze_communication,
     configured_routing_runtime,
     current_routing_decision,
 )
+from app.routing.policy import load_routing_policy
 
 
 AUTO_ROUTING_JOB_TYPE = "route_communication"
@@ -104,15 +104,18 @@ def enqueue_forwarding_for_decision(
 
     if decision.company_id != company_id:
         raise AutomaticRoutingError("La decisión no pertenece al tenant indicado.", error_type="tenant_mismatch")
-    settings = _llm_settings(db, company_id)
-    if not auto_forwarding_enabled(settings):
+    policy = load_routing_policy(db, company_id)
+    if policy.simulation_mode:
+        if source == "automatic" and not policy.auto_routing_enabled:
+            return None
+    elif not policy.auto_forwarding_enabled:
         return None
 
     if source == "automatic":
         if (
             decision.status != "routed"
             or decision.requires_review
-            or decision.confidence < DEFAULT_ROUTING_THRESHOLDS.auto_route_confidence
+            or decision.confidence < policy.auto_threshold
             or (decision.ambiguity_reason or "").strip()
             or decision.department_id is None
         ):
@@ -152,6 +155,28 @@ def enqueue_forwarding_for_decision(
             db.flush()
             return None
         raise AutomaticRoutingError("El departamento no tiene destination_email válido.", error_type="invalid_destination")
+
+    if policy.simulation_mode:
+        action = ensure_routing_action(
+            db,
+            company_id=company_id,
+            communication_id=decision.communication_id,
+            routing_decision_id=decision.id,
+            department_id=department_id,
+            triggered_by_user_id=triggered_by_user_id,
+            source="simulation",
+        )
+        if action.status in {"sent", "processing", "cancelled", "simulated"}:
+            return None
+        action.action_type = "simulated_forward"
+        action.source = "simulation"
+        action.status = "simulated"
+        action.error_code = None
+        action.error_message = f"Simulación: se habría reenviado a {department.destination_email}."
+        action.completed_at = datetime.now(timezone.utc)
+        action.updated_at = action.completed_at
+        db.flush()
+        return None
 
     if source == "automatic":
         decision.final_department_id = department_id
@@ -285,6 +310,7 @@ def process_automatic_routing(db: Session, job: BackgroundJob) -> dict[str, Any]
                 communication_id=communication_id,
             ),
             source="auto",
+            thresholds=load_routing_policy(db, job.company_id).as_routing_thresholds(),
         )
     except Exception:
         communication.routing_status = "routing_error"

@@ -363,12 +363,16 @@ def analyze_communication(
     *,
     user_id: int | None = None,
     source: str = "agent",
-    thresholds: RoutingThresholds = DEFAULT_ROUTING_THRESHOLDS,
+    thresholds: RoutingThresholds | None = None,
     routing_context: dict[str, Any] | None = None,
 ) -> RoutingDecision:
     """Classify and persist a new decision, preserving all previous analyses."""
 
     communication = _communication_for_routing(db, company_id, communication_id)
+    if thresholds is None:
+        from app.routing.policy import load_routing_policy
+
+        thresholds = load_routing_policy(db, company_id).as_routing_thresholds()
     proposal = classify_communication(
         db,
         company_id,

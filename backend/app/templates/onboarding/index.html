@@ -16,6 +16,8 @@
     <div class="onboarding-progress-track"><span style="width: {{ progress_percent }}%"></span></div>
   </section>
 
+  <section class="panel readiness-summary"><div class="section-title-row"><div><span class="kibak-eyebrow">Pre-flight</span><h3>Preparación del sistema</h3><p class="muted">{{ readiness.failures }} bloqueos · {{ readiness.warnings }} avisos</p></div><a class="button secondary compact-button" href="/settings/readiness">Ver comprobaciones</a></div><div class="readiness-chip-row">{% for check in readiness.checks[:6] %}<span class="readiness-chip readiness-{{ check.status|lower }}">{{ check.label }} · {{ check.status }}</span>{% endfor %}</div></section>
+
   <section class="onboarding-steps" aria-label="Checklist de configuración">
     {% for step in steps %}
       <article class="onboarding-step panel {% if step.complete %}is-complete{% elif next_step and step.key == next_step.key %}is-current{% endif %}">

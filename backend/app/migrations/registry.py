@@ -1276,6 +1276,19 @@ def _apply_tenant_auto_forwarding(engine, dry_run: bool) -> list[str]:  # noqa: 
     return actions
 
 
+def _apply_tenant_pre_pilot_controls(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(
+        engine,
+        "llm_settings",
+        {
+            "simulation_mode": "BOOLEAN DEFAULT false",
+            "routing_review_threshold": "FLOAT DEFAULT 0.70",
+            "routing_auto_threshold": "FLOAT DEFAULT 0.90",
+        },
+        dry_run=dry_run,
+    )
+
+
 def _apply_tenant_routing_evaluations(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import (
         RoutingEvaluationCase,
@@ -1431,10 +1444,22 @@ TENANT_SCHEMA_MIGRATIONS = [
         ),
         upgrade=_apply_tenant_routing_evaluations,
     ),
+    MigrationSpec(
+        version="2026.09.08.2",
+        name="tenant routing policy and simulation controls",
+        checksum=checksum_text(
+            "tenant",
+            "routing_policy",
+            "llm_settings.simulation_mode",
+            "llm_settings.routing_review_threshold",
+            "llm_settings.routing_auto_threshold",
+        ),
+        upgrade=_apply_tenant_pre_pilot_controls,
+    ),
 ]
 
-# KIBAK starts from the clean baseline and must not replay legacy migrations.
-KIBAK_TENANT_SCHEMA_MIGRATIONS = [TENANT_SCHEMA_MIGRATIONS[-1]]
+# KIBAK starts from the clean baseline and only advances through KIBAK migrations.
+KIBAK_TENANT_SCHEMA_MIGRATIONS = [TENANT_SCHEMA_MIGRATIONS[-2], TENANT_SCHEMA_MIGRATIONS[-1]]
 
 MASTER_SCHEMA_MIGRATIONS = [
     MigrationSpec(

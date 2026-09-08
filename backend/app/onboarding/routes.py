@@ -10,6 +10,7 @@ from app.core.templating import templates
 from app.db.models import BrandingSettings, Company, Department, DepartmentKnowledge, LLMSettings, Mailbox
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
+from app.routing.policy import build_kibak_readiness
 
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
@@ -50,6 +51,7 @@ def onboarding_page(
     ) or 0
     mailbox_count = db.scalar(select(func.count(Mailbox.id)).where(Mailbox.company_id == user.company_id, Mailbox.enabled.is_(True))) or 0
     llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == user.company_id))
+    readiness = build_kibak_readiness(db, user.company_id)
 
     company_ready = bool(
         company
@@ -89,5 +91,6 @@ def onboarding_page(
             "total_steps": len(steps),
             "progress_percent": round(completed * 100 / len(steps)) if steps else 0,
             "next_step": next((item for item in steps if not item["complete"]), None),
+            "readiness": readiness,
         },
     )

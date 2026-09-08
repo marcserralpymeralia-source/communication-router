@@ -13,7 +13,7 @@ from app.core.templating import templates
 from app.db.models import Department, Mailbox, RoutingAction, RoutingCorrection, RoutingDecision, User
 from app.master.service import TenantUser
 from app.routing.auto import enqueue_forwarding_for_decision
-from app.routing.forwarding import current_forward_action, enqueue_forwarding_job, ensure_routing_action, serialize_forward_action
+from app.routing.forwarding import current_forward_action, serialize_forward_action
 from app.routing.service import (
     RoutingValidationError,
     analyze_communication,
@@ -50,6 +50,7 @@ FORWARDING_STATUS_LABELS = {
     "sent": "Enviado",
     "failed": "Error de envío",
     "cancelled": "Cancelado",
+    "simulated": "Simulada: no enviada",
 }
 
 
@@ -60,6 +61,8 @@ def _workbench_status(communication, decision, action) -> tuple[str, str, str]: 
         or (action is not None and action.status == "failed")
     ):
         return "error", WORKBENCH_STATUS_LABELS["error"], "status-error"
+    if action is not None and action.status == "simulated":
+        return "reviewed", "Simulada: no enviada", "status-pending"
     if decision is None:
         return "unclassified", WORKBENCH_STATUS_LABELS["unclassified"], "status-doubtful"
     if decision.status == "pending_review":
@@ -180,8 +183,8 @@ def _timeline(row: dict, corrections: list[RoutingCorrection], users: dict[int, 
     action = row["forward_action"]
     if action is not None:
         if action.created_at:
-            label = "Derivada automáticamente" if action.source == "auto" and action.status == "sent" else "Derivación solicitada"
-            events.append({"at": action.created_at, "label": label, "detail": FORWARDING_STATUS_LABELS.get(action.status, action.status), "tone": "positive" if action.status == "sent" else "pending"})
+            label = "Derivada automáticamente" if action.source == "auto" and action.status == "sent" else "Acción simulada" if action.status == "simulated" else "Derivación solicitada"
+            events.append({"at": action.created_at, "label": label, "detail": FORWARDING_STATUS_LABELS.get(action.status, action.status), "tone": "positive" if action.status in {"sent", "simulated"} else "pending"})
         if action.completed_at and action.status == "failed":
             events.append({"at": action.completed_at, "label": "Error en la derivación", "detail": "Requiere revisión", "tone": "error"})
     return sorted((event for event in events if event["at"] is not None), key=lambda event: event["at"])
@@ -428,24 +431,23 @@ def forward_communication_action(
     if decision.final_department_id is None:
         return _routing_redirect(request, communication_id, error="La comunicación todavía no tiene departamento final.")
     try:
-        action = ensure_routing_action(
+        job = enqueue_forwarding_for_decision(
             db,
             company_id=user.company_id,
-            communication_id=communication_id,
-            routing_decision_id=decision.id,
-            department_id=decision.final_department_id,
+            decision=decision,
             triggered_by_user_id=user.id,
-            source="manual",
+            source="human",
+            human_confirmed=True,
         )
-        job = enqueue_forwarding_job(db, action)
+        action = current_forward_action(db, user.company_id, communication_id)
         db.commit()
     except RoutingValidationError as exc:
         db.rollback()
         return _routing_redirect(request, communication_id, error=str(exc))
     payload = {
         "ok": True,
-        "action_id": action.id,
-        "status": action.status,
+        "action_id": action.id if action else None,
+        "status": action.status if action else "blocked",
         "job_id": job.id if job else None,
     }
     return _routing_redirect(request, communication_id) if "application/json" not in (request.headers.get("accept") or "") else JSONResponse(payload)

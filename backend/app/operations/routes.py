@@ -81,6 +81,9 @@ def operations_page(
         "forwarding_errors": db.scalar(
             select(func.count(RoutingAction.id)).where(RoutingAction.company_id == user.company_id, RoutingAction.status == "failed")
         ) or 0,
+        "simulated_actions": db.scalar(
+            select(func.count(RoutingAction.id)).where(RoutingAction.company_id == user.company_id, RoutingAction.status == "simulated")
+        ) or 0,
     }
     jobs = db.scalars(
         select(BackgroundJob)

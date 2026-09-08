@@ -41,6 +41,7 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
         "debug_mode",
         "auto_routing_enabled",
         "auto_forwarding_enabled",
+        "simulation_mode",
         "enable_exact_match", "enable_alias_match", "enable_relation_match", "enable_history_match", "enable_rag_match", "enable_llm_support",
         "always_human_review", "auto_approve_aliases", "block_new_customer", "block_conflicting_aliases", "block_missing_quantity", "block_missing_reference",
     }

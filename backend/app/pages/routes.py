@@ -153,9 +153,24 @@ def _kibak_history_context(
         if communication_ids
         else []
     )
+    actions = (
+        db.scalars(
+            select(RoutingAction)
+            .where(
+                RoutingAction.company_id == user.company_id,
+                RoutingAction.communication_id.in_(communication_ids or [-1]),
+            )
+            .order_by(RoutingAction.id.desc())
+        ).all()
+        if communication_ids
+        else []
+    )
     decision_by_communication = {}
     for decision in decisions:
         decision_by_communication.setdefault(decision.communication_id, decision)
+    action_by_communication = {}
+    for action in actions:
+        action_by_communication.setdefault(action.communication_id, action)
     all_departments = db.scalars(
         select(Department)
         .where(Department.company_id == user.company_id, Department.active.is_(True))
@@ -176,6 +191,7 @@ def _kibak_history_context(
     items = []
     for communication in communications:
         decision = decision_by_communication.get(communication.id)
+        action = action_by_communication.get(communication.id)
         department_id = decision.final_department_id if decision and decision.final_department_id else decision.department_id if decision else None
         items.append(
             {
@@ -190,12 +206,12 @@ def _kibak_history_context(
                     "reviewed": "Revisada",
                     "error": "Error",
                     "unclassified": "Sin clasificar",
-                }.get(communication.routing_status, communication.routing_status or "Sin estado"),
+                }.get(communication.routing_status, communication.routing_status or "Sin estado") if not action or action.status != "simulated" else "Simulación: no enviada",
                 "department": department_names.get(department_id, "Sin departamento"),
                 "confidence": decision.confidence if decision else None,
                 "reason": decision.reason if decision else None,
                 "category": (decision.final_category or decision.category) if decision else "Sin categoría",
-                "source": decision.source if decision else "unknown",
+                "source": action.source if action else decision.source if decision else "unknown",
             }
         )
     correction_count = db.scalar(

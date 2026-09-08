@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Communication, Department, RoutingAction, RoutingDecision
 
 
-STATUS_ORDER = ("automatic", "review", "reviewed", "unclassified", "error", "forwarded")
+STATUS_ORDER = ("automatic", "review", "reviewed", "simulated", "unclassified", "error", "forwarded")
 STATUS_LABELS = {
     "automatic": "Automática",
     "review": "Pendiente de revisión",
@@ -16,11 +16,14 @@ STATUS_LABELS = {
     "unclassified": "Sin clasificar",
     "error": "Error",
     "forwarded": "Reenviada",
+    "simulated": "Simulada",
 }
 STATUS_CLASSES = {key: f"kibak-status-{key.replace('_', '-')}" for key in STATUS_LABELS}
 
 
 def _status_for(communication, decision, action):
+    if action is not None and action.status == "simulated":
+        return "simulated"
     if action is not None and action.status == "sent":
         return "forwarded"
     if communication.routing_status == "routing_error":
@@ -136,6 +139,7 @@ def kibak_dashboard_summary(db: Session, company_id: int, recent_limit: int = 8)
 
     total = len(communications)
     automatic_count = status_counts["automatic"] + status_counts["forwarded"]
+    simulated_count = status_counts["simulated"]
     status_distribution = [
         {
             "key": key,
@@ -163,6 +167,7 @@ def kibak_dashboard_summary(db: Session, company_id: int, recent_limit: int = 8)
             {"label": "% automatizadas", "value": f"{_percentage(automatic_count, total)}%", "meta": "Sobre el total recibido"},
             {"label": "Confianza media", "value": _confidence_label(average_confidence), "meta": "De las decisiones disponibles"},
             {"label": "Tiempo medio de derivación", "value": _format_duration(sum(routing_seconds) / len(routing_seconds) if routing_seconds else None), "meta": "Cuando existe trazabilidad"},
+            {"label": "En simulación", "value": simulated_count, "meta": "No se han enviado"},
         ],
         "status_distribution": status_distribution,
         "department_distribution": department_distribution,

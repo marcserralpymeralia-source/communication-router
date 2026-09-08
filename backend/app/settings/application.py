@@ -236,7 +236,7 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
             "agent_enabled", "use_same_model_for_all", "can_read_email", "can_extract_pdf", "can_classify_email", "can_extract_order",
             "can_suggest_customer", "can_suggest_products", "can_calculate_score", "can_create_pending_order", "can_mark_no_order",
             "can_reply_customer", "allow_auto_confirm", "allow_auto_export", "detailed_llm_logs", "store_llm_payloads", "anonymize_llm_logs",
-            "debug_mode", "auto_routing_enabled", "auto_forwarding_enabled",
+            "debug_mode", "auto_routing_enabled", "auto_forwarding_enabled", "simulation_mode",
         ]
         for field in bool_fields:
             form.setdefault(field, "off")

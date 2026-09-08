@@ -29,7 +29,16 @@
     <article class="module-card panel" id="automation">
       <div class="module-card-head"><div><h3>Automatización</h3><span class="module-state {% if automation.auto_routing_enabled or automation.auto_forwarding_enabled %}ready{% else %}pending{% endif %}">{{ 'Activa' if automation.auto_routing_enabled or automation.auto_forwarding_enabled else 'Desactivada' }}</span></div></div>
       <p>Routing automático: {{ 'Activo' if automation.auto_routing_enabled else 'Inactivo' }} · Derivaciones automáticas: {{ 'Activo' if automation.auto_forwarding_enabled else 'Inactivo' }}</p>
-      <a class="button secondary compact-button" href="/operations">Abrir operaciones</a>
+      <form method="post" action="/settings/automation" class="settings-policy-form">
+        <label><input type="checkbox" name="auto_routing_enabled" {% if automation.auto_routing_enabled %}checked{% endif %}> Analizar automáticamente</label>
+        <label><input type="checkbox" name="simulation_mode" {% if automation.simulation_mode %}checked{% endif %}> Modo simulación</label>
+        <label><input type="checkbox" name="auto_forwarding_enabled" {% if automation.auto_forwarding_enabled %}checked{% endif %}> Reenvío automático</label>
+        <div class="form-grid"><label>Umbral de revisión<input type="number" name="routing_review_threshold" min="0" max="1" step="0.01" value="{{ automation.review_threshold }}"></label><label>Umbral de automatización<input type="number" name="routing_auto_threshold" min="0" max="1" step="0.01" value="{{ automation.auto_threshold }}"></label></div>
+        <p class="muted">Una confianza alta no garantiza la derivación automática si KIBAK detecta ambigüedad.</p>
+        <button class="button secondary compact-button" type="submit">Guardar política</button>
+        <a class="button ghost compact-button" href="/settings/readiness">Preparación del sistema</a>
+        <a class="button ghost compact-button" href="/operations">Abrir operaciones</a>
+      </form>
     </article>
     <article class="module-card panel">
       <div class="module-card-head"><div><h3>Departamentos y conocimiento</h3><span class="module-state ready">{{ counts.departments }}</span></div></div>
@@ -46,5 +55,9 @@
       <p>{{ branding.app_name if branding and branding.app_name else 'KIBAK' }}</p>
     </article>
   </div>
+  <section class="panel readiness-summary">
+    <div class="section-title-row"><div><h3>Preparación del sistema</h3><p class="muted">Sin conexión automática a IMAP, SMTP ni proveedores durante esta comprobación.</p></div><a class="button ghost compact-button" href="/settings/readiness">Ver detalle</a></div>
+    <div class="readiness-chip-row">{% for check in readiness.checks %}<span class="readiness-chip readiness-{{ check.status|lower }}">{{ check.label }} · {{ check.status }}</span>{% endfor %}</div>
+  </section>
 </section>
 {% endblock %}

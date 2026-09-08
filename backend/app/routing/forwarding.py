@@ -60,6 +60,7 @@ def _safe_error_message(error_code: str) -> str:
         "attachment_unavailable": "No se pudo leer un adjunto de la comunicación.",
         "attachment_too_large": "Un adjunto supera el tamaño máximo permitido.",
         "message_too_large": "El mensaje supera el tamaño máximo permitido.",
+        "invalid_header": "La comunicación contiene un header no válido.",
         "authentication_failed": "El servidor SMTP rechazó la autenticación.",
         "destination_rejected": "El servidor SMTP rechazó el destinatario.",
         "smtp_4xx": "El servidor SMTP devolvió un error transitorio.",
@@ -304,10 +305,17 @@ def _build_message(
             error_code="invalid_destination",
         )
 
+    subject = communication.subject or "Comunicación"
+    if any(character in subject for character in ("\r", "\n")):
+        raise ForwardingDeliveryError(
+            _safe_error_message("invalid_header"),
+            error_code="invalid_header",
+        )
+
     message = EmailMessage()
     message["From"] = from_email
     message["To"] = destination
-    message["Subject"] = f"[Routing] {communication.subject or 'Comunicación'}"
+    message["Subject"] = f"[Routing] {subject}"
     if _valid_email(communication.sender_email):
         message["Reply-To"] = communication.sender_email.strip()
     message["Message-ID"] = f"<forward-{sha256(action.idempotency_key.encode()).hexdigest()[:24]}@comm-router.local>"
@@ -400,6 +408,18 @@ def forward_communication(
     )
     if action is not None:
         if action.status in {"sent", "processing", "cancelled"}:
+            return action
+        from app.routing.policy import load_routing_policy
+
+        if load_routing_policy(db, company_id).simulation_mode:
+            action.action_type = "simulated_forward"
+            action.source = "simulation"
+            action.status = "simulated"
+            action.error_code = None
+            action.error_message = f"Simulación: se habría reenviado a {department.destination_email}."
+            action.completed_at = datetime.now(timezone.utc)
+            action.updated_at = action.completed_at
+            db.flush()
             return action
         if action.status == "failed" and (
             not retry_failed or action.error_code not in FORWARD_RETRYABLE_ERRORS
@@ -494,7 +514,7 @@ def process_forwarding_job(db: Session, job: BackgroundJob) -> dict[str, Any]:
     )
     if action is None:
         raise ForwardingValidationError("La acción de forwarding no existe en el tenant indicado.")
-    if action.status in {"sent", "cancelled", "processing"}:
+    if action.status in {"sent", "cancelled", "processing", "simulated"}:
         return {"ok": True, "skipped": True, "action_id": action.id, "status": action.status}
 
     result = forward_communication(

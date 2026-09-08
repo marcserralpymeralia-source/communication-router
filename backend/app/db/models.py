@@ -818,6 +818,10 @@ class LLMSettings(Base):
     agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_routing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_forwarding_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Simulation is opt-in for legacy rows; auto-routing/forwarding remain off by default.
+    simulation_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    routing_review_threshold: Mapped[float] = mapped_column(Float, default=0.70)
+    routing_auto_threshold: Mapped[float] = mapped_column(Float, default=0.90)
     agent_mode: Mapped[str] = mapped_column(String(80), default="semiautomatico")
     safety_level: Mapped[str] = mapped_column(String(50), default="equilibrado")
     provider: Mapped[str] = mapped_column(String(50), default="openai")
