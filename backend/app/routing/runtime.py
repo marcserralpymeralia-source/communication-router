@@ -34,12 +34,17 @@ class RoutingLLMRuntime:
         provider_call: RoutingProvider | None = None,
         user_id: int | None = None,
         communication_id: int | None = None,
+        input_reference: str | None = None,
+        allow_disabled: bool = False,
     ) -> None:
         self.db = db
         self.company_id = company_id
         self.provider_call = provider_call
         self.user_id = user_id
         self.communication_id = communication_id
+        self.input_reference = input_reference
+        self.allow_disabled = allow_disabled
+        self.last_result: dict[str, Any] | None = None
 
     def _settings(self) -> LLMSettings:
         settings = self.db.scalar(select(LLMSettings).where(LLMSettings.company_id == self.company_id))
@@ -67,7 +72,7 @@ class RoutingLLMRuntime:
         )
 
         def provider_call(current_settings, messages, model):  # noqa: ANN001
-            if not getattr(current_settings, "agent_enabled", True):
+            if not self.allow_disabled and not getattr(current_settings, "agent_enabled", True):
                 return {
                     "ok": False,
                     "error_type": "disabled",
@@ -82,7 +87,8 @@ class RoutingLLMRuntime:
             settings,
             user_prompt,
             provider_call=provider_call,
-            input_reference=f"communication:{self.communication_id}" if self.communication_id is not None else None,
+            input_reference=self.input_reference
+            or (f"communication:{self.communication_id}" if self.communication_id is not None else None),
             user_id=self.user_id,
             commit=False,
         )
@@ -99,4 +105,5 @@ class RoutingLLMRuntime:
                 f"Respuesta de routing no valida: {errors or 'esquema no valido'}.",
                 error_type=str(result.get("validation_status") or "schema_error"),
             )
+        self.last_result = result
         return result

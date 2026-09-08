@@ -55,6 +55,7 @@ def _infer_company_id(engine) -> int | None:  # noqa: ANN001
 
 def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
     from app.migrations.kibak_baseline import KIBAK_TENANT_BASELINE_VERSION, KIBAK_TENANT_TABLES
+    from app.migrations.registry import CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM, CURRENT_KIBAK_TENANT_SCHEMA_NAME, CURRENT_KIBAK_TENANT_SCHEMA_VERSION
 
     table_names = set(inspect(engine).get_table_names())
     missing_tables = sorted(KIBAK_TENANT_TABLES - table_names)
@@ -71,15 +72,18 @@ def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
             ),
             {"company_id": company_id},
         ).mappings().first()
-    if row is None or row["version"] != KIBAK_TENANT_BASELINE_VERSION:
+    valid_versions = {KIBAK_TENANT_BASELINE_VERSION, CURRENT_KIBAK_TENANT_SCHEMA_VERSION}
+    if row is None or row["version"] not in valid_versions:
         version = row["version"] if row else None
         raise RuntimeError(f"Version desconocida en schema_migrations: {version}")
+    evolved = row["version"] == CURRENT_KIBAK_TENANT_SCHEMA_VERSION
+    expected_checksum = CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM if evolved else KIBAK_TENANT_BASELINE_VERSION
     return {
         **dict(row),
-        "current_version": KIBAK_TENANT_BASELINE_VERSION,
-        "current_name": "KIBAK tenant baseline",
-        "current_checksum": KIBAK_TENANT_BASELINE_VERSION,
-        "is_current": row["status"] == "current" and row["checksum"] in {None, KIBAK_TENANT_BASELINE_VERSION},
+        "current_version": row["version"],
+        "current_name": CURRENT_KIBAK_TENANT_SCHEMA_NAME if evolved else "KIBAK tenant baseline",
+        "current_checksum": expected_checksum,
+        "is_current": row["status"] == "current" and row["checksum"] in {None, expected_checksum},
     }
 
 

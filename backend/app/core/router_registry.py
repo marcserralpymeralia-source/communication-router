@@ -28,6 +28,7 @@ from app.users.routes import router as users_router
 from app.workbench.routes import router as workbench_router
 from app.onboarding.routes import router as onboarding_router
 from app.operations.routes import router as operations_router
+from app.routing.routes import router as routing_router
 
 try:  # pragma: no cover - optional during phased extraction
     from app.health.routes import router as health_router
@@ -52,6 +53,7 @@ def get_registered_routers() -> list:
         workbench_router,
         onboarding_router,
         operations_router,
+        routing_router,
         whatsapp_router,
         whatsapp_inbox_router,
         alerts_router,

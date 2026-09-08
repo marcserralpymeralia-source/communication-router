@@ -6,12 +6,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.database import Base
+from app.core.config import get_settings
 from app.db.models import TenantSchemaMigration
 from app.migrations.helpers import ensure_columns, existing_columns, table_exists
 from app.migrations.registry import (
     CURRENT_TENANT_SCHEMA_CHECKSUM,
     CURRENT_TENANT_SCHEMA_NAME,
     CURRENT_TENANT_SCHEMA_VERSION,
+    CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM,
+    CURRENT_KIBAK_TENANT_SCHEMA_NAME,
+    CURRENT_KIBAK_TENANT_SCHEMA_VERSION,
+    KIBAK_TENANT_SCHEMA_MIGRATIONS,
     SUPPORTED_TENANT_LEGACY_VERSIONS,
     TENANT_MIGRATION_COLUMNS,
     TENANT_COMPAT_COLUMNS,
@@ -22,6 +27,25 @@ from app.migrations.runner import migration_summary, run_migration_plan
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _tenant_migration_config(db: Session) -> tuple[list, str, str, str, set[str]]:
+    kibak_postgres = get_settings().app_slug.strip().lower() == "kibak" and not db.get_bind().url.drivername.startswith("sqlite")
+    if kibak_postgres:
+        return (
+            KIBAK_TENANT_SCHEMA_MIGRATIONS,
+            CURRENT_KIBAK_TENANT_SCHEMA_VERSION,
+            CURRENT_KIBAK_TENANT_SCHEMA_NAME,
+            CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM,
+            SUPPORTED_TENANT_LEGACY_VERSIONS | {"kibak.tenant.1"},
+        )
+    return (
+        TENANT_SCHEMA_MIGRATIONS,
+        CURRENT_TENANT_SCHEMA_VERSION,
+        CURRENT_TENANT_SCHEMA_NAME,
+        CURRENT_TENANT_SCHEMA_CHECKSUM,
+        SUPPORTED_TENANT_LEGACY_VERSIONS,
+    )
 
 
 def _latest_state(db: Session, company_id: int | None) -> TenantSchemaMigration | None:
@@ -43,6 +67,7 @@ def ensure_tenant_migration_record(
     notes: str | None = None,
     application_version: str | None = None,
 ) -> TenantSchemaMigration:
+    _, current_version, current_name, current_checksum, _ = _tenant_migration_config(db)
     state = _latest_state(db, company_id)
     now = _now()
     if not state:
@@ -50,9 +75,9 @@ def ensure_tenant_migration_record(
         db.add(state)
     if company_id is not None:
         state.company_id = company_id
-    state.version = CURRENT_TENANT_SCHEMA_VERSION
-    state.name = CURRENT_TENANT_SCHEMA_NAME
-    state.checksum = CURRENT_TENANT_SCHEMA_CHECKSUM
+    state.version = current_version
+    state.name = current_name
+    state.checksum = current_checksum
     state.execution_ms = 0
     state.application_version = application_version
     state.status = "current"
@@ -92,20 +117,30 @@ def upgrade_tenant_schema(
     dry_run: bool = False,
     baseline: bool = False,
 ) -> dict:
+    kibak_postgres = get_settings().app_slug.strip().lower() == "kibak" and not engine.url.drivername.startswith("sqlite")
     if not dry_run:
-        Base.metadata.create_all(bind=engine)
+        if kibak_postgres:
+            from app.migrations.kibak_baseline import KIBAK_TENANT_TABLES
+
+            Base.metadata.create_all(
+                bind=engine,
+                tables=[Base.metadata.tables[name] for name in KIBAK_TENANT_TABLES],
+            )
+        else:
+            Base.metadata.create_all(bind=engine)
         ensure_columns(engine, "schema_migrations", TENANT_MIGRATION_COLUMNS, dry_run=False)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = session_factory()
     try:
+        specs, current_version, current_name, current_checksum, allowed_legacy_versions = _tenant_migration_config(db)
         summary = run_migration_plan(
             engine,
             db,
             TenantSchemaMigration,
-            TENANT_SCHEMA_MIGRATIONS,
+            specs,
             application_version=application_version,
             company_id=company_id,
-            allowed_legacy_versions=SUPPORTED_TENANT_LEGACY_VERSIONS,
+            allowed_legacy_versions=allowed_legacy_versions,
             baseline=baseline,
             dry_run=dry_run,
         )
@@ -129,9 +164,9 @@ def upgrade_tenant_schema(
                 summary.update(
                     migration_summary(
                         state,
-                        current_version=CURRENT_TENANT_SCHEMA_VERSION,
-                        current_name=CURRENT_TENANT_SCHEMA_NAME,
-                        current_checksum=CURRENT_TENANT_SCHEMA_CHECKSUM,
+                        current_version=current_version,
+                        current_name=current_name,
+                        current_checksum=current_checksum,
                     )
                 )
         return summary
@@ -140,6 +175,7 @@ def upgrade_tenant_schema(
 
 
 def tenant_migration_report(db: Session, company_id: int | None, *, persist: bool = False) -> dict:
+    _, current_version, current_name, current_checksum, _ = _tenant_migration_config(db)
     if not table_exists(db.get_bind(), "schema_migrations"):
         return {
             "version": None,
@@ -147,9 +183,9 @@ def tenant_migration_report(db: Session, company_id: int | None, *, persist: boo
             "checksum": None,
             "execution_ms": None,
             "application_version": None,
-            "current_version": CURRENT_TENANT_SCHEMA_VERSION,
-            "current_name": CURRENT_TENANT_SCHEMA_NAME,
-            "current_checksum": CURRENT_TENANT_SCHEMA_CHECKSUM,
+            "current_version": current_version,
+            "current_name": current_name,
+            "current_checksum": current_checksum,
             "status": "missing",
             "last_checked_at": None,
             "applied_at": None,
@@ -165,9 +201,9 @@ def tenant_migration_report(db: Session, company_id: int | None, *, persist: boo
             "checksum": None,
             "execution_ms": None,
             "application_version": None,
-            "current_version": CURRENT_TENANT_SCHEMA_VERSION,
-            "current_name": CURRENT_TENANT_SCHEMA_NAME,
-            "current_checksum": CURRENT_TENANT_SCHEMA_CHECKSUM,
+            "current_version": current_version,
+            "current_name": current_name,
+            "current_checksum": current_checksum,
             "status": "incomplete",
             "last_checked_at": None,
             "applied_at": None,
@@ -184,9 +220,9 @@ def tenant_migration_report(db: Session, company_id: int | None, *, persist: boo
             "checksum": None,
             "execution_ms": None,
             "application_version": None,
-            "current_version": CURRENT_TENANT_SCHEMA_VERSION,
-            "current_name": CURRENT_TENANT_SCHEMA_NAME,
-            "current_checksum": CURRENT_TENANT_SCHEMA_CHECKSUM,
+            "current_version": current_version,
+            "current_name": current_name,
+            "current_checksum": current_checksum,
             "status": "missing",
             "last_checked_at": None,
             "applied_at": None,
@@ -198,9 +234,9 @@ def tenant_migration_report(db: Session, company_id: int | None, *, persist: boo
         state.last_checked_at = now
         state.updated_at = now
         if state.status != "failed":
-            state.status = "current" if state.version == CURRENT_TENANT_SCHEMA_VERSION and state.checksum == CURRENT_TENANT_SCHEMA_CHECKSUM else "outdated"
+            state.status = "current" if state.version == current_version and state.checksum == current_checksum else "outdated"
         db.commit()
-    expected = CURRENT_TENANT_SCHEMA_VERSION
+    expected = current_version
     return {
         "version": state.version,
         "name": state.name,
@@ -208,14 +244,14 @@ def tenant_migration_report(db: Session, company_id: int | None, *, persist: boo
         "execution_ms": state.execution_ms,
         "application_version": state.application_version,
         "current_version": expected,
-        "current_name": CURRENT_TENANT_SCHEMA_NAME,
-        "current_checksum": CURRENT_TENANT_SCHEMA_CHECKSUM,
+        "current_name": current_name,
+        "current_checksum": current_checksum,
         "status": state.status,
         "last_checked_at": state.last_checked_at,
         "applied_at": state.applied_at,
         "last_error": state.last_error,
         "notes": state.notes,
-        "is_current": state.version == expected and state.checksum == CURRENT_TENANT_SCHEMA_CHECKSUM and state.status == "current",
+        "is_current": state.version == expected and state.checksum == current_checksum and state.status == "current",
     }
 
 

@@ -645,6 +645,152 @@ class RoutingAction(Base):
     )
 
 
+class RoutingEvaluationSet(Base):
+    __tablename__ = "routing_evaluation_sets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(180))
+    description: Mapped[str | None] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    cases: Mapped[list["RoutingEvaluationCase"]] = relationship(
+        back_populates="evaluation_set", cascade="all, delete-orphan"
+    )
+    runs: Mapped[list["RoutingEvaluationRun"]] = relationship(
+        back_populates="evaluation_set", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (UniqueConstraint("company_id", "name"), UniqueConstraint("company_id", "id"))
+
+
+class RoutingEvaluationCase(Base):
+    __tablename__ = "routing_evaluation_cases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    evaluation_set_id: Mapped[int] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(500))
+    body: Mapped[str] = mapped_column(Text)
+    sender: Mapped[str | None] = mapped_column(String(255))
+    recipients: Mapped[str | None] = mapped_column(Text)
+    cc_recipients: Mapped[str | None] = mapped_column(Text)
+    attachment_text: Mapped[str | None] = mapped_column(Text)
+    expected_department_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    expected_category: Mapped[str | None] = mapped_column(String(100))
+    expected_requires_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    criticality: Mapped[str] = mapped_column(String(20), default="normal")
+    notes: Mapped[str | None] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    evaluation_set: Mapped[RoutingEvaluationSet] = relationship(back_populates="cases")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "evaluation_set_id"),
+            ("routing_evaluation_sets.company_id", "routing_evaluation_sets.id"),
+            name="fk_routing_evaluation_case_set_company",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("company_id", "id"),
+        CheckConstraint("criticality IN ('normal', 'high', 'critical')", name="ck_routing_evaluation_case_criticality"),
+    )
+
+
+class RoutingEvaluationRun(Base):
+    __tablename__ = "routing_evaluation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    evaluation_set_id: Mapped[int] = mapped_column(Integer, index=True)
+    prompt_name: Mapped[str] = mapped_column(String(150), default="communication_department_routing")
+    prompt_purpose: Mapped[str] = mapped_column(String(100), default="communication_department_routing")
+    prompt_version: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str] = mapped_column(String(100), default="unknown")
+    temperature: Mapped[float | None] = mapped_column(Float)
+    thresholds_json: Mapped[str] = mapped_column(Text, default="{}")
+    context_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    total_cases: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    evaluation_set: Mapped[RoutingEvaluationSet] = relationship(back_populates="runs")
+    results: Mapped[list["RoutingEvaluationResult"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="RoutingEvaluationResult.id"
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "evaluation_set_id"),
+            ("routing_evaluation_sets.company_id", "routing_evaluation_sets.id"),
+            name="fk_routing_evaluation_run_set_company",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "created_by_user_id"),
+            ("users.company_id", "users.id"),
+            name="fk_routing_evaluation_run_user_company",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("company_id", "id"),
+    )
+
+
+class RoutingEvaluationResult(Base):
+    __tablename__ = "routing_evaluation_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    run_id: Mapped[int] = mapped_column(Integer, index=True)
+    evaluation_case_id: Mapped[int] = mapped_column(Integer, index=True)
+    criticality: Mapped[str] = mapped_column(String(20), default="normal")
+    expected_department_id: Mapped[int | None] = mapped_column(Integer)
+    predicted_department_id: Mapped[int | None] = mapped_column(Integer)
+    expected_category: Mapped[str | None] = mapped_column(String(100))
+    predicted_category: Mapped[str | None] = mapped_column(String(100))
+    expected_requires_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    requires_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0)
+    reason: Mapped[str | None] = mapped_column(Text)
+    alternative_department_id: Mapped[int | None] = mapped_column(Integer)
+    correct_department: Mapped[bool | None] = mapped_column(Boolean)
+    auto_route_candidate: Mapped[bool] = mapped_column(Boolean, default=False)
+    false_auto_route: Mapped[bool] = mapped_column(Boolean, default=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(30), default="completed", index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    run: Mapped[RoutingEvaluationRun] = relationship(back_populates="results")
+    evaluation_case: Mapped[RoutingEvaluationCase] = relationship(overlaps="run,results")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "run_id"),
+            ("routing_evaluation_runs.company_id", "routing_evaluation_runs.id"),
+            name="fk_routing_evaluation_result_run_company",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "evaluation_case_id"),
+            ("routing_evaluation_cases.company_id", "routing_evaluation_cases.id"),
+            name="fk_routing_evaluation_result_case_company",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("company_id", "run_id", "evaluation_case_id"),
+    )
+
+
 class EmailTemplate(Base):
     __tablename__ = "email_templates"
 

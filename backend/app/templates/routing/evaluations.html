@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% set title = "Evaluation Lab" %}
+{% block content %}
+<section class="page-section routing-lab-shell"><header class="page-section-header"><div><span class="kibak-eyebrow">KIBAK · CALIDAD</span><h2>Evaluation Lab</h2><p>Conjuntos sintéticos para medir el agente antes de conectarlo al correo real.</p></div><a class="button secondary" href="/routing/playground">Abrir Playground</a></header>{% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}{% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
+  <div class="routing-lab-toolbar"><form method="post" action="/routing/evaluations/demo-seed"><button class="button primary" type="submit">Crear dataset demo</button></form><form class="routing-inline-form" method="post" action="/routing/evaluations/sets"><input name="name" placeholder="Nombre del nuevo conjunto" required><input name="description" placeholder="Descripción opcional"><button class="button secondary" type="submit">Nuevo conjunto</button></form></div>
+  <div class="routing-set-list">{% for item in sets %}<article class="panel routing-set-row"><div><span class="module-state {% if item.active %}ready{% else %}pending{% endif %}">{{ "Activo" if item.active else "Pausado" }}</span><h3>{{ item.name }}</h3><p>{{ item.description or 'Sin descripción' }}</p></div><a class="button secondary compact-button" href="/routing/evaluations/{{ item.id }}">Abrir</a></article>{% else %}<div class="panel empty-state"><h3>Aún no hay conjuntos</h3><p>Crea el dataset demo para empezar con casos reproducibles.</p></div>{% endfor %}</div>
+</section>
+{% endblock %}

@@ -4060,6 +4060,33 @@ form.stack, .stack { gap: 9px; }
   }
 }
 
+/* Routing Lab keeps technical review dense and separate from operational records. */
+.routing-lab-shell { display: grid; gap: 18px; }
+.routing-lab-grid, .routing-lab-two-col { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 16px; align-items: start; }
+.routing-lab-form, .routing-result-card, .routing-context-panel, .routing-simulator { display: grid; gap: 12px; padding: 18px; }
+.routing-lab-actions, .routing-lab-toolbar, .routing-inline-form, .routing-result-meta, .routing-simulator { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.routing-lab-result, .routing-set-list, .routing-case-list { display: grid; gap: 12px; }
+.routing-result-main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.routing-result-main div, .routing-metric { display: grid; gap: 4px; }
+.routing-result-main small, .routing-metric small, .routing-case-row span, .routing-case-row small, .routing-run-row span { color: var(--muted); font-size: 12px; }
+.routing-result-main strong { font-size: 22px; color: var(--heading, #173d42); }
+.routing-context-panel summary { cursor: pointer; font-weight: 700; }
+.routing-context-department { display: grid; gap: 3px; border-top: 1px solid #e4eeeb; padding-top: 10px; }
+.routing-context-department span, .routing-context-department small { color: var(--muted); font-size: 12px; }
+.routing-context-panel pre { max-height: 360px; overflow: auto; white-space: pre-wrap; background: #f5f9f7; padding: 12px; font-size: 11px; }
+.routing-set-row, .routing-case-row, .routing-run-row { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 14px; border-bottom: 1px solid #e4eeeb; }
+.routing-set-row:last-child, .routing-case-row:last-child, .routing-run-row:last-child { border-bottom: 0; }
+.routing-set-row h3, .routing-case-row strong, .routing-run-row strong { display: block; margin: 3px 0; }
+.routing-case-row > div, .routing-run-row > div { display: grid; gap: 3px; }
+.routing-metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.routing-metric { padding: 15px; min-height: 92px; }
+.routing-metric strong { font-size: 24px; color: var(--heading, #173d42); }
+.routing-definition-list { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); gap: 10px; margin: 0; }
+.routing-definition-list dt { color: var(--muted); font-size: 12px; }
+.routing-definition-list dd { margin: 0; font-size: 13px; }
+.routing-case-form { display: grid; gap: 12px; padding: 18px; }
+@media (max-width: 900px) { .routing-lab-grid, .routing-lab-two-col { grid-template-columns: 1fr; } .routing-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 .webmail-detail-pane {
   display: none;
   height: 100%;

@@ -1276,6 +1276,31 @@ def _apply_tenant_auto_forwarding(engine, dry_run: bool) -> list[str]:  # noqa: 
     return actions
 
 
+def _apply_tenant_routing_evaluations(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import (
+        RoutingEvaluationCase,
+        RoutingEvaluationResult,
+        RoutingEvaluationRun,
+        RoutingEvaluationSet,
+    )
+
+    actions: list[str] = []
+    tables = (
+        ("routing_evaluation_sets", RoutingEvaluationSet),
+        ("routing_evaluation_cases", RoutingEvaluationCase),
+        ("routing_evaluation_runs", RoutingEvaluationRun),
+        ("routing_evaluation_results", RoutingEvaluationResult),
+    )
+    with engine.connect() as conn:
+        existing = set(inspect(conn).get_table_names())
+    for table_name, model in tables:
+        if table_name not in existing:
+            actions.append(f"CREATE TABLE {table_name} (...)")
+        if not dry_run:
+            model.__table__.create(bind=engine, checkfirst=True)
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1393,7 +1418,23 @@ TENANT_SCHEMA_MIGRATIONS = [
         ),
         upgrade=_apply_tenant_auto_forwarding,
     ),
+    MigrationSpec(
+        version="2026.09.08.1",
+        name="tenant routing evaluation lab",
+        checksum=checksum_text(
+            "tenant",
+            "routing_evaluation_lab",
+            "routing_evaluation_sets",
+            "routing_evaluation_cases",
+            "routing_evaluation_runs",
+            "routing_evaluation_results",
+        ),
+        upgrade=_apply_tenant_routing_evaluations,
+    ),
 ]
+
+# KIBAK starts from the clean baseline and must not replay legacy migrations.
+KIBAK_TENANT_SCHEMA_MIGRATIONS = [TENANT_SCHEMA_MIGRATIONS[-1]]
 
 MASTER_SCHEMA_MIGRATIONS = [
     MigrationSpec(
@@ -1431,7 +1472,10 @@ MASTER_SCHEMA_MIGRATIONS = [
 CURRENT_TENANT_SCHEMA_VERSION = TENANT_SCHEMA_MIGRATIONS[-1].version
 CURRENT_TENANT_SCHEMA_NAME = TENANT_SCHEMA_MIGRATIONS[-1].name
 CURRENT_TENANT_SCHEMA_CHECKSUM = registry_checksum(TENANT_SCHEMA_MIGRATIONS)
-SUPPORTED_TENANT_LEGACY_VERSIONS = {"2026.07.10.1"}
+CURRENT_KIBAK_TENANT_SCHEMA_VERSION = KIBAK_TENANT_SCHEMA_MIGRATIONS[-1].version
+CURRENT_KIBAK_TENANT_SCHEMA_NAME = KIBAK_TENANT_SCHEMA_MIGRATIONS[-1].name
+CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM = registry_checksum(KIBAK_TENANT_SCHEMA_MIGRATIONS)
+SUPPORTED_TENANT_LEGACY_VERSIONS = {"2026.07.10.1", "kibak.tenant.1"}
 
 CURRENT_MASTER_SCHEMA_VERSION = MASTER_SCHEMA_MIGRATIONS[-1].version
 CURRENT_MASTER_SCHEMA_NAME = MASTER_SCHEMA_MIGRATIONS[-1].name

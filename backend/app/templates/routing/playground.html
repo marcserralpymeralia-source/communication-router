@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% set title = "Routing Playground" %}
+{% block content %}
+<section class="page-section routing-lab-shell">
+  <header class="page-section-header">
+    <div><span class="kibak-eyebrow">KIBAK · LABORATORIO</span><h2>Prueba el criterio de RoutingAgent</h2><p>Analiza una comunicación ficticia sin crear datos operativos ni ejecutar derivaciones.</p></div>
+    <div class="routing-lab-actions"><a class="button secondary" href="/routing/evaluations">Evaluation Lab</a><a class="button secondary" href="/routing/quality">Calidad</a></div>
+  </header>
+  {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
+  <div class="routing-lab-grid">
+    <form class="panel routing-lab-form" method="post" action="/routing/playground/analyze">
+      <div class="section-title-row"><div><span class="kibak-eyebrow">Dry-run</span><h3>Comunicación de prueba</h3></div><span class="badge">Sin persistencia operativa</span></div>
+      <label>Asunto<input name="subject" value="{{ form.subject or '' }}" required></label>
+      <div class="form-grid"><label>Remitente<input name="sender" value="{{ form.sender or '' }}" placeholder="cliente@ejemplo.com"></label><label>Buzón de contexto<select name="mailbox_id"><option value="">Buzón activo por defecto</option>{% for mailbox in mailboxes %}<option value="{{ mailbox.id }}">{{ mailbox.name }} · {{ mailbox.email_address }}</option>{% endfor %}</select></label></div>
+      <div class="form-grid"><label>Para<input name="recipients" value="{{ form.recipients or '' }}"></label><label>Cc<input name="cc_recipients" value="{{ form.cc_recipients or '' }}"></label></div>
+      <label>Contenido<textarea name="body" rows="10" required>{{ form.body or '' }}</textarea></label>
+      <label>Texto extraído del adjunto<textarea name="attachment_text" rows="4">{{ form.attachment_text or '' }}</textarea></label>
+      <button class="button primary" type="submit">Analizar comunicación</button>
+    </form>
+    <section class="routing-lab-result">
+      {% if result %}
+        <article class="panel routing-result-card"><span class="kibak-eyebrow">Resultado</span><h3>{{ result.proposal.category }}</h3><div class="routing-result-main"><div><small>Departamento propuesto</small><strong>{% for department in context_view.departments %}{% if department.department_id == result.proposal.proposed_department_id %}{{ department.name }}{% endif %}{% endfor %}{% if not result.proposal.proposed_department_id %}Sin clasificar{% endif %}</strong></div><div><small>Confianza</small><strong>{{ (result.proposal.confidence * 100)|round(0)|int }}% · {% if result.proposal.confidence >= 0.9 %}Alta{% elif result.proposal.confidence >= 0.7 %}Media{% else %}Baja{% endif %}</strong></div></div><div class="routing-result-meta"><span class="badge {% if result.proposal.requires_review %}status-pending{% else %}status-confirmed{% endif %}">{{ "Requiere revisión" if result.proposal.requires_review else "No requiere revisión" }}</span>{% if result.proposal.alternative_department_id %}<span>Alternativa: #{{ result.proposal.alternative_department_id }}</span>{% endif %}</div><p><strong>Motivo</strong><br>{{ result.proposal.reason }}</p>{% if result.proposal.ambiguity_reason %}<p><strong>Ambigüedad</strong><br>{{ result.proposal.ambiguity_reason }}</p>{% endif %}<small class="muted">Auditoría: {{ result.prompt_execution.input_reference or 'playground' }} · prompt v{{ result.prompt_execution.prompt_version }}</small></article>
+      {% else %}<div class="panel empty-state routing-empty"><h3>El resultado aparecerá aquí</h3><p>El análisis solo registra la ejecución del prompt con contexto de laboratorio.</p></div>{% endif %}
+      <details class="panel routing-context-panel" open><summary>Contexto utilizado</summary><p class="muted">Este es el contexto organizativo exacto enviado al agente. No incluye credenciales ni secretos.</p>{% for department in context_view.departments %}<div class="routing-context-department"><strong>{{ department.name }}</strong><span>{{ department.description or 'Sin descripción' }}</span>{% for label, key in [('Responsabilidades', 'responsibilities'), ('Exclusiones', 'exclusions'), ('Ejemplos', 'examples'), ('Excepciones', 'exceptions'), ('Guidelines', 'guidelines')] %}{% if department.knowledge[key] %}<small><b>{{ label }}:</b> {{ department.knowledge[key]|map(attribute='content')|join('; ') }}</small>{% endif %}{% endfor %}{% if department.raci %}<small><b>RACI:</b> {% for assignment in department.raci %}{{ assignment.name or assignment.email or ('Usuario #' ~ assignment.user_id) }} ({{ assignment.raci_role }}){% if not loop.last %}; {% endif %}{% endfor %}</small>{% endif %}</div>{% endfor %}<details><summary>Ver payload completo</summary><pre>{{ context_view.raw }}</pre></details></details>
+    </section>
+  </div>
+</section>
+{% endblock %}
