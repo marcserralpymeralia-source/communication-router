@@ -1,42 +1,100 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="page-section stack">
-  <div class="section-title-row">
+<section class="page-section communications-workspace">
+  <header class="communications-page-header">
     <div>
-      <p class="eyebrow">Workbench</p>
+      <p class="eyebrow">Bandeja de trabajo</p>
       <h2>Comunicaciones</h2>
-      <p class="muted">Analiza, revisa y confirma el destino de cada comunicación.</p>
     </div>
-    <a class="button secondary" href="/communications">Vista API</a>
-  </div>
+    <div class="communications-header-note">
+      <span class="communications-header-dot"></span>
+      <span>Priorizadas por atención</span>
+    </div>
+  </header>
 
-  <div class="summary-grid">
-    {% for key, label in [("all", "Todas"), ("unclassified", "Sin analizar"), ("pending_review", "Pendientes"), ("routed", "Resueltas")] %}
-      <a class="subpanel" href="/communications/workbench?status={{ key }}">
-        <span class="muted">{{ label }}</span>
-        <strong>{{ counts[key] }}</strong>
+  <form class="communications-search" method="get" action="/communications/workbench">
+    <label class="communications-search-field">
+      <span class="sr-only">Buscar comunicaciones</span>
+      <input type="search" name="q" value="{{ search }}" placeholder="Buscar por remitente, asunto o departamento" autocomplete="off">
+    </label>
+    {% if selected_status != "all" %}<input type="hidden" name="status" value="{{ selected_status }}">{% endif %}
+    <button class="button" type="submit">Buscar</button>
+    {% if search %}<a class="button secondary" href="/communications/workbench{% if selected_status != 'all' %}?status={{ selected_status }}{% endif %}">Limpiar</a>{% endif %}
+  </form>
+
+  <nav class="communications-filters" aria-label="Filtrar comunicaciones">
+    {% for key, label in filter_options %}
+      <a class="communications-filter{% if selected_status == key %} is-active{% endif %}" href="/communications/workbench?status={{ key }}{% if search %}&q={{ search|urlencode }}{% endif %}">
+        <span>{{ label }}</span><strong>{{ counts[key] }}</strong>
       </a>
     {% endfor %}
-  </div>
+  </nav>
 
-  <div class="subpanel table-wrap">
-    <table>
-      <thead><tr><th>Fecha</th><th>Remitente</th><th>Asunto</th><th>Estado</th><th></th></tr></thead>
-      <tbody>
-        {% for item in items %}
+  <div class="communications-list-panel">
+    <div class="communications-list-heading">
+      <div>
+        <h3>{% for key, label in filter_options if key == selected_status %}{{ label }}{% endfor %}</h3>
+        <span class="muted">{{ items|length }} comunicaciones mostradas</span>
+      </div>
+      <span class="muted">Más urgentes primero</span>
+    </div>
+    <div class="communications-table-wrap">
+      <table class="communications-table">
+        <thead>
           <tr>
-            <td>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if item.received_at else "Sin fecha" }}</td>
-            <td>{{ item.sender_name or item.sender_email or "Sin remitente" }}</td>
-            <td><strong>{{ item.subject or "Sin asunto" }}</strong></td>
-            <td><span class="badge {{ item.routing_status|status_class }}">{{ item.routing_status|status_label }}</span></td>
-            <td><a class="button secondary compact-button" href="/communications/workbench/{{ item.id }}">Abrir</a></td>
+            <th>Fecha</th>
+            <th>Remitente</th>
+            <th>Asunto</th>
+            <th>Buzón receptor</th>
+            <th>Destino</th>
+            <th>Confianza</th>
+            <th>Estado</th>
+            <th><span class="sr-only">Abrir</span></th>
           </tr>
-        {% else %}
-          <tr><td colspan="5" class="muted">No hay comunicaciones en este estado.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for row in items %}
+            <tr class="communications-row communications-row--{{ row.status_key }}">
+              <td class="communication-date">{{ row.communication.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if row.communication.received_at else "Sin fecha" }}</td>
+              <td>
+                <strong class="communication-sender">{{ row.communication.sender_name or "Sin remitente" }}</strong>
+                <span class="communication-secondary">{{ row.communication.sender_email or "Email no disponible" }}</span>
+              </td>
+              <td class="communication-subject-cell">
+                <a href="/communications/workbench/{{ row.communication.id }}"><strong>{{ row.communication.subject or "Sin asunto" }}</strong></a>
+                {% if row.communication.attachments %}<span class="communication-attachment-count">{{ row.communication.attachments|length }} adjunto{% if row.communication.attachments|length != 1 %}s{% endif %}</span>{% endif %}
+              </td>
+              <td>
+                <span class="communication-mailbox">{{ row.mailbox.name if row.mailbox else "Buzón no disponible" }}</span>
+                {% if row.mailbox and row.mailbox.email_address %}<span class="communication-secondary">{{ row.mailbox.email_address }}</span>{% endif %}
+              </td>
+              <td>
+                {% if row.final_department %}
+                  <span class="communication-department">{{ row.final_department.name }}</span>
+                  <span class="communication-secondary">Final</span>
+                {% elif row.proposed_department %}
+                  <span class="communication-department">{{ row.proposed_department.name }}</span>
+                  <span class="communication-secondary">Propuesto</span>
+                {% else %}
+                  <span class="muted">Sin departamento</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.decision %}
+                  <span class="confidence-value {% if row.decision.confidence >= 0.9 %}confidence-high{% elif row.decision.confidence >= 0.7 %}confidence-medium{% else %}confidence-low{% endif %}">{{ row.confidence_label }}</span>
+                  <span class="communication-secondary">{% if row.decision.confidence >= 0.9 %}Alta{% elif row.decision.confidence >= 0.7 %}Media{% else %}Baja{% endif %}</span>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
+              <td><span class="badge {{ row.status_class }}">{{ row.status_label }}</span></td>
+              <td><a class="button secondary compact-button" href="/communications/workbench/{{ row.communication.id }}">Abrir</a></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8"><div class="communications-empty"><strong>No hay comunicaciones aquí</strong><span class="muted">Cuando llegue una nueva comunicación aparecerá en esta bandeja.</span>{% if search %}<a href="/communications/workbench">Ver todas</a>{% endif %}</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 {% endblock %}

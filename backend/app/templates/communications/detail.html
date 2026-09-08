@@ -1,89 +1,136 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="page-section stack">
-  <div class="section-title-row">
-    <div>
-      <a class="muted" href="/communications/workbench">Comunicaciones</a>
+<section class="page-section communication-detail-workspace">
+  <header class="communication-detail-header">
+    <div class="communication-detail-heading">
+      <a class="back-link" href="/communications/workbench">← Volver a comunicaciones</a>
+      <p class="eyebrow">Comunicación recibida</p>
       <h2>{{ communication.subject or "Sin asunto" }}</h2>
-      <p class="muted">{{ communication.sender_name or "Sin remitente" }} · {{ communication.sender_email or "" }}</p>
+      <p class="muted">{{ communication.sender_name or "Sin remitente" }}{% if communication.sender_email %} · {{ communication.sender_email }}{% endif %}</p>
     </div>
-    <span class="badge {{ communication.routing_status|status_class }}">{{ communication.routing_status|status_label }}</span>
-  </div>
+    <div class="communication-detail-status">
+      <span class="badge {{ row.status_class }}">{{ row.status_label }}</span>
+      <span class="muted">{{ communication.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if communication.received_at else "Sin fecha" }}</span>
+    </div>
+  </header>
 
-  {% if error %}<div class="subpanel status-error">{{ error }}</div>{% endif %}
+  {% if error %}<div class="subpanel status-error communication-error">{{ error }}</div>{% endif %}
 
-  <div class="detail-grid">
-    <article class="subpanel stack">
-      <div class="section-title-row"><h3>Contenido</h3><span class="muted">{{ communication.provider }}</span></div>
-      <p class="muted">Para: {{ communication.to_recipients or "Sin destinatarios" }}</p>
-      <pre class="whatsapp-chat-text">{{ communication.body_text or "Sin contenido" }}</pre>
+  <div class="communication-detail-grid">
+    <article class="communication-source-panel">
+      <div class="communication-panel-heading">
+        <div><span class="eyebrow">Entrada original</span><h3>Comunicación</h3></div>
+        <span class="source-channel">{{ communication.provider|upper }}</span>
+      </div>
+
+      <div class="communication-identity">
+        <div class="sender-avatar">{{ (communication.sender_name or communication.sender_email or "?")[0]|upper }}</div>
+        <div><strong>{{ communication.sender_name or "Remitente no identificado" }}</strong><a href="mailto:{{ communication.sender_email }}">{{ communication.sender_email or "Email no disponible" }}</a></div>
+      </div>
+
+      <dl class="communication-meta-grid">
+        <div><dt>Recibido en</dt><dd>{{ row.mailbox.name if row.mailbox else "Buzón no disponible" }}</dd></div>
+        <div><dt>Fecha y hora</dt><dd>{{ communication.received_at | local_dt(tenant_timezone, "%d/%m/%Y · %H:%M") if communication.received_at else "Sin fecha" }}</dd></div>
+        <div><dt>Para</dt><dd>{{ recipients.to|join(", ") if recipients.to else "Sin destinatarios" }}</dd></div>
+        {% if recipients.cc %}<div><dt>CC</dt><dd>{{ recipients.cc|join(", ") }}</dd></div>{% endif %}
+      </dl>
+
+      <div class="communication-original-content">
+        <span class="communication-field-label">Asunto</span>
+        <h4>{{ communication.subject or "Sin asunto" }}</h4>
+        <span class="communication-field-label">Mensaje</span>
+        <div class="communication-body">{{ communication.body_text or "Sin contenido" }}</div>
+      </div>
+
       {% if communication.attachments %}
-        <h4>Adjuntos</h4>
-        {% for attachment in communication.attachments %}<div>{{ attachment.filename }} <span class="muted">({{ attachment.extraction_status }})</span></div>{% endfor %}
+        <section class="communication-attachments">
+          <div class="communication-subsection-heading"><h4>Adjuntos</h4><span class="muted">{{ communication.attachments|length }}</span></div>
+          <div class="communication-attachment-list">
+            {% for attachment in communication.attachments %}
+              <div class="communication-attachment">
+                <span class="communication-file-icon">{% if attachment.mime_type and "pdf" in attachment.mime_type|lower %}PDF{% elif attachment.mime_type and "image" in attachment.mime_type|lower %}IMG{% else %}FILE{% endif %}</span>
+                <div><strong>{{ attachment.filename }}</strong><span class="communication-secondary">{{ attachment.mime_type or "Archivo adjunto" }}{% if attachment.size_bytes %} · {{ (attachment.size_bytes / 1024)|round(0)|int }} KB{% endif %}</span></div>
+              </div>
+            {% endfor %}
+          </div>
+        </section>
       {% endif %}
+      {% for attachment in communication.attachments if attachment.extracted_text %}
+        <details class="communication-extracted-text"><summary>Ver texto extraído de {{ attachment.filename }}</summary><pre>{{ attachment.extracted_text }}</pre></details>
+      {% endfor %}
     </article>
 
-    <aside class="subpanel stack">
-      <div class="section-title-row"><h3>Routing</h3><span class="badge {{ (decision.status if decision else communication.routing_status)|status_class }}">{{ (decision.status if decision else communication.routing_status)|status_label }}</span></div>
+    <aside class="communication-analysis-panel">
+      <div class="communication-panel-heading">
+        <div><span class="eyebrow">Análisis IA</span><h3>Qué entiende KIBAK</h3></div>
+        <span class="ai-mark">IA</span>
+      </div>
+
       {% if decision %}
-        <div><strong>Propuesta:</strong> {{ decision.department_id or "Sin departamento" }}</div>
-        <div><strong>Categoría:</strong> {{ decision.category }}</div>
-        <div><strong>Confianza:</strong> {{ "%.0f"|format(decision.confidence * 100) }}%</div>
-        <p>{{ decision.reason }}</p>
-        {% if decision.ambiguity_reason %}<p class="muted">{{ decision.ambiguity_reason }}</p>{% endif %}
-        {% if decision.status == "pending_review" %}
-          <form method="post" action="/communications/{{ communication.id }}/confirm">
-            <input type="hidden" name="decision_id" value="{{ decision.id }}">
-            <button class="button" type="submit">Confirmar propuesta</button>
-          </form>
-          <form method="post" action="/communications/{{ communication.id }}/correct" class="stack">
-            <input type="hidden" name="decision_id" value="{{ decision.id }}">
-            <label>Departamento final
-              <select name="corrected_department_id" required>
-                {% for department in departments %}<option value="{{ department.id }}">{{ department.name }}</option>{% endfor %}
-              </select>
-            </label>
-            <label>Motivo de la corrección
-              <textarea name="reason" required rows="3"></textarea>
-            </label>
-            <button class="button secondary" type="submit">Guardar corrección</button>
-          </form>
-        {% endif %}
-      {% else %}
-        <p class="muted">Todavía no hay una decisión persistida.</p>
-      {% endif %}
-      <form method="post" action="/communications/{{ communication.id }}/analyze">
-        <button class="button secondary" type="submit">Analizar comunicación</button>
-      </form>
-      {% if forward_action %}
-        <div class="subpanel stack">
-          <div class="section-title-row">
-            <h4>Forwarding</h4>
-            <span class="badge {{ forward_action.status|status_class }}">{{ forward_action.status|status_label }}</span>
-          </div>
-          <div class="muted">Destino: {{ forward_action.destination_email }}</div>
-          {% if forward_action.error_message %}<p class="status-error">{{ forward_action.error_message }}</p>{% endif %}
+        <div class="analysis-intent">
+          <span class="communication-field-label">Intención detectada</span>
+          <strong>{{ decision.category|status_label }}</strong>
         </div>
+        <div class="analysis-destination-block">
+          <span class="communication-field-label">Departamento recomendado</span>
+          <strong>{{ row.proposed_department.name if row.proposed_department else "Sin departamento" }}</strong>
+          {% if row.final_department and row.final_department.id != (row.proposed_department.id if row.proposed_department else none) %}<span class="analysis-final-destination">Final: {{ row.final_department.name }}</span>{% endif %}
+        </div>
+        <div class="analysis-confidence {% if decision.confidence >= 0.9 %}confidence-high{% elif decision.confidence >= 0.7 %}confidence-medium{% else %}confidence-low{% endif %}">
+          <div><span class="communication-field-label">Confianza</span><strong>{{ row.confidence_label }} <small>{% if decision.confidence >= 0.9 %}Alta{% elif decision.confidence >= 0.7 %}Media{% else %}Baja{% endif %}</small></strong></div>
+          <div class="confidence-track"><span style="width: {{ (decision.confidence * 100)|round(0)|int }}%"></span></div>
+        </div>
+        <div class="analysis-reason"><span class="communication-field-label">Motivo</span><p>{{ decision.reason }}</p></div>
+        {% if row.alternative_department %}<div class="analysis-alternative"><span class="communication-field-label">Alternativa</span><strong>{{ row.alternative_department.name }}</strong></div>{% endif %}
+      {% else %}
+        <div class="analysis-empty"><strong>Aún no hay análisis</strong><span class="muted">Analiza esta comunicación para obtener una propuesta de destino.</span></div>
       {% endif %}
-      {% if decision and decision.final_department_id and (not forward_action or forward_action.status not in ["sent", "processing"]) %}
-        <form method="post" action="/communications/{{ communication.id }}/forward">
+
+      <div class="analysis-status-line"><span>Estado actual</span><span class="badge {{ row.status_class }}">{{ row.status_label }}</span></div>
+
+      <div class="communication-actions">
+        <form method="post" action="/communications/{{ communication.id }}/analyze"><button class="button secondary" type="submit">{% if decision %}Volver a analizar{% else %}Analizar comunicación{% endif %}</button></form>
+        {% if decision and decision.status == "pending_review" %}
+          <form method="post" action="/communications/{{ communication.id }}/confirm"><input type="hidden" name="decision_id" value="{{ decision.id }}"><button class="button" type="submit">Confirmar propuesta</button></form>
+        {% endif %}
+      </div>
+
+      {% if decision %}
+        <form method="post" action="/communications/{{ communication.id }}/correct" class="communication-correction-form">
           <input type="hidden" name="decision_id" value="{{ decision.id }}">
-          <button class="button" type="submit">Reenviar al departamento</button>
+          <label>Cambiar departamento
+            <select name="corrected_department_id" required>
+              <option value="" disabled selected>Selecciona un departamento</option>
+              {% for department in departments %}<option value="{{ department.id }}"{% if row.final_department and department.id == row.final_department.id %} selected{% endif %}>{{ department.name }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>Motivo del cambio
+            <textarea name="reason" required rows="2" placeholder="Explica brevemente la decisión"></textarea>
+          </label>
+          <button class="button secondary" type="submit">Guardar cambio</button>
         </form>
+      {% endif %}
+
+      {% if forward_action %}
+        <div class="communication-forwarding">
+          <div class="communication-subsection-heading"><h4>Derivación</h4><span class="badge {% if forward_action.status == 'failed' %}status-error{% elif forward_action.status == 'sent' %}status-confirmed{% else %}status-pending{% endif %}">{{ forwarding_status_labels.get(forward_action.status, forward_action.status) }}</span></div>
+          <span class="communication-secondary">Destino: {{ row.final_department.name if row.final_department else "Departamento seleccionado" }}{% if forward_action.destination_email %} · {{ forward_action.destination_email }}{% endif %}</span>
+          {% if forward_action.error_message %}<span class="status-error">No se pudo completar la derivación. Requiere revisión.</span>{% endif %}
+        </div>
+      {% elif decision and decision.final_department_id %}
+        <form method="post" action="/communications/{{ communication.id }}/forward"><input type="hidden" name="decision_id" value="{{ decision.id }}"><button class="button" type="submit">Reenviar al departamento</button></form>
       {% endif %}
     </aside>
   </div>
 
-  <article class="subpanel stack">
-    <h3>Historial de decisiones</h3>
-    {% for item in history %}
-      <div class="review-inline-summary">
-        <span><strong>#{{ item.analysis_number }}</strong> {{ item.status }}</span>
-        <span>{{ item.confidence | round(2) }} · {{ item.category }}</span>
-        <span>{{ item.created_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if item.created_at else "" }}</span>
-      </div>
-    {% else %}<p class="muted">Sin análisis previos.</p>{% endfor %}
-  </article>
+  <section class="communication-timeline-panel">
+    <div class="communication-panel-heading"><div><span class="eyebrow">Trazabilidad</span><h3>Historial</h3></div><span class="muted">Actividad de esta comunicación</span></div>
+    {% if timeline %}
+      <ol class="communication-timeline">
+        {% for event in timeline %}<li class="timeline-event timeline-event--{{ event.tone }}"><span class="timeline-dot"></span><div><strong>{{ event.label }}</strong><span>{{ event.detail }}</span></div><time>{{ event.at | local_dt(tenant_timezone, "%H:%M") }}</time></li>{% endfor %}
+      </ol>
+    {% else %}<div class="communications-empty"><strong>Aún no hay actividad</strong><span class="muted">La trazabilidad aparecerá cuando se analice o revise la comunicación.</span></div>{% endif %}
+  </section>
 </section>
 {% endblock %}

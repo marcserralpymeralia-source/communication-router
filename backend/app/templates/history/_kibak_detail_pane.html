@@ -1,0 +1,13 @@
+{% if communication %}
+<article class="panel detail-pane">
+  <header class="detail-pane-header"><div><span class="kibak-eyebrow">Comunicación #{{ communication.id }}</span><h3>{{ communication.subject or 'Sin asunto' }}</h3></div></header>
+  <dl class="detail-meta">
+    <div><dt>Remitente</dt><dd>{{ communication.sender_name or communication.sender_email or 'No disponible' }}</dd></div>
+    <div><dt>Estado</dt><dd>{{ communication.routing_status }}</dd></div>
+    <div><dt>Recibida</dt><dd>{{ communication.received_at.strftime('%d/%m/%Y %H:%M') if communication.received_at else 'Sin fecha' }}</dd></div>
+  </dl>
+  <div class="detail-body">{{ communication.body_text or 'Sin contenido disponible.' }}</div>
+</article>
+{% else %}
+<div class="empty-state"><p>Comunicación no encontrada.</p></div>
+{% endif %}

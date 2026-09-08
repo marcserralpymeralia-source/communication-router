@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% set title = "Historial" %}
+{% block content %}
+<section class="page-section">
+  <header class="page-section-header">
+    <div>
+      <span class="kibak-eyebrow">KIBAK</span>
+      <h2>Historial de comunicaciones</h2>
+      <p>Consulta el recorrido de cada comunicación y las decisiones tomadas por el equipo.</p>
+    </div>
+    <a class="button primary" href="/communications/workbench">Abrir comunicaciones</a>
+  </header>
+
+  <div class="kibak-kpi-grid">
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Comunicaciones</span><strong class="kibak-kpi-value">{{ summary.communications }}</strong><span class="kibak-kpi-meta">En el periodo seleccionado</span></article>
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Correcciones</span><strong class="kibak-kpi-value">{{ summary.corrections }}</strong><span class="kibak-kpi-meta">Ajustes manuales registrados</span></article>
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Acciones</span><strong class="kibak-kpi-value">{{ summary.actions }}</strong><span class="kibak-kpi-meta">Acciones de routing creadas</span></article>
+  </div>
+
+  <section class="panel table-panel">
+    <form class="toolbar" method="get" action="/history">
+      <label class="sr-only" for="history-search">Buscar</label>
+      <input id="history-search" type="search" name="search" value="{{ search }}" placeholder="Buscar por asunto o remitente">
+      <button class="button secondary" type="submit">Buscar</button>
+    </form>
+    {% if items %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Comunicación</th><th>Remitente</th><th>Departamento</th><th>Estado</th><th>Recibida</th></tr></thead>
+          <tbody>
+            {% for item in items %}
+              <tr>
+                <td><a href="/communications/workbench/{{ item.id }}">{{ item.subject }}</a></td>
+                <td>{{ item.sender }}</td>
+                <td>{{ item.department }}</td>
+                <td><span class="badge">{{ item.routing_status_label }}</span></td>
+                <td>{{ item.received_at.strftime('%d/%m/%Y %H:%M') if item.received_at else 'Sin fecha' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state"><h3>Aún no hay historial</h3><p>Las comunicaciones procesadas aparecerán aquí.</p><a class="button secondary" href="/communications/workbench">Ir a comunicaciones</a></div>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

@@ -9,10 +9,23 @@ from sqlalchemy import and_, case, exists, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth.dependencies import current_user
+from app.core.config import get_settings
 from app.core.pagination import normalize_page
 from app.core.templating import templates
+from app.dashboard.kibak import kibak_dashboard_summary
 from app.dashboard.service import orders_workbench_summary, workbench_summary
-from app.db.models import Customer, Email, Order, OrderLine, ScoringSettings
+from app.db.models import (
+    Communication,
+    Customer,
+    Department,
+    Email,
+    Order,
+    OrderLine,
+    RoutingAction,
+    RoutingCorrection,
+    RoutingDecision,
+    ScoringSettings,
+)
 from app.dashboard.service import _customer_suggestion_maps, _load_order_line_metrics, email_workbench_item, load_order_view_data, order_workbench_item, suggest_customer_for_email
 from app.orders.state import ERROR_ORDER_STATUSES, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES, TERMINAL_ORDER_STATUSES
 from app.master.service import TenantUser
@@ -23,6 +36,135 @@ from app.tenancy.database import get_tenant_db
 router = APIRouter(tags=["pages"])
 
 
+def _is_postgresql_session(db: Session) -> bool:
+    get_bind = getattr(db, "get_bind", None)
+    if not callable(get_bind):
+        return False
+    try:
+        return get_bind().dialect.name == "postgresql"
+    except AttributeError:
+        return False
+
+
+def _is_kibak_runtime(db: Session) -> bool:
+    return get_settings().app_slug.strip().lower() == "kibak" and _is_postgresql_session(db)
+
+
+def _kibak_history_context(
+    db: Session,
+    user: TenantUser,
+    *,
+    request: Request,
+    search: str,
+    page: int,
+    page_size: int,
+    start: datetime | None,
+    end: datetime | None,
+) -> dict:
+    filters = [Communication.company_id == user.company_id]
+    if start:
+        filters.append(Communication.received_at >= start)
+    if end:
+        filters.append(Communication.received_at <= end)
+    if search.strip():
+        pattern = f"%{search.strip()}%"
+        filters.append(
+            or_(
+                Communication.subject.ilike(pattern),
+                Communication.sender_email.ilike(pattern),
+                Communication.sender_name.ilike(pattern),
+            )
+        )
+    page, page_size = normalize_page(page, page_size)
+    total = db.scalar(select(func.count(Communication.id)).where(*filters)) or 0
+    communications = db.scalars(
+        select(Communication)
+        .where(*filters)
+        .order_by(Communication.received_at.desc().nullslast(), Communication.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    communication_ids = [item.id for item in communications]
+    decisions = (
+        db.scalars(
+            select(RoutingDecision)
+            .where(
+                RoutingDecision.company_id == user.company_id,
+                RoutingDecision.communication_id.in_(communication_ids or [-1]),
+                RoutingDecision.status != "superseded",
+            )
+            .order_by(RoutingDecision.analysis_number.desc(), RoutingDecision.id.desc())
+        ).all()
+        if communication_ids
+        else []
+    )
+    decision_by_communication = {}
+    for decision in decisions:
+        decision_by_communication.setdefault(decision.communication_id, decision)
+    department_ids = {
+        department_id
+        for decision in decisions
+        for department_id in (decision.department_id, decision.final_department_id)
+        if department_id
+    }
+    departments = (
+        db.scalars(
+            select(Department).where(
+                Department.company_id == user.company_id,
+                Department.id.in_(department_ids),
+            )
+        ).all()
+        if department_ids
+        else []
+    )
+    department_names = {department.id: department.name for department in departments}
+    items = []
+    for communication in communications:
+        decision = decision_by_communication.get(communication.id)
+        department_id = decision.final_department_id if decision and decision.final_department_id else decision.department_id if decision else None
+        items.append(
+            {
+                "id": communication.id,
+                "subject": communication.subject or "Sin asunto",
+                "sender": communication.sender_name or communication.sender_email or "Remitente no disponible",
+                "received_at": communication.received_at,
+                "routing_status": communication.routing_status,
+                "routing_status_label": {
+                    "routed": "Enrutada",
+                    "pending_review": "Pendiente de revisión",
+                    "reviewed": "Revisada",
+                    "error": "Error",
+                    "unclassified": "Sin clasificar",
+                }.get(communication.routing_status, communication.routing_status or "Sin estado"),
+                "department": department_names.get(department_id, "Sin departamento"),
+                "confidence": decision.confidence if decision else None,
+                "reason": decision.reason if decision else None,
+            }
+        )
+    correction_count = db.scalar(
+        select(func.count(RoutingCorrection.id)).where(RoutingCorrection.company_id == user.company_id)
+    ) or 0
+    action_count = db.scalar(
+        select(func.count(RoutingAction.id)).where(RoutingAction.company_id == user.company_id)
+    ) or 0
+    return {
+        "request": request,
+        "user": user,
+        "title": "Historial",
+        "items": items,
+        "search": search,
+        "summary": {
+            "communications": total,
+            "corrections": correction_count,
+            "actions": action_count,
+        },
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        },
+    }
 HISTORY_EMAIL_CURRENT_STATUSES = (
     "not_processed",
     "pending",
@@ -414,6 +556,22 @@ def dashboard(
         redirect_target = "/" if not request.url.query else f"/?{request.url.query}"
         return RedirectResponse(redirect_target, status_code=303)
 
+    if (
+        request.url.path == "/"
+        and get_settings().app_slug.strip().lower() == "kibak"
+        and _is_postgresql_session(db)
+    ):
+        request.state.enabled_channels = ("email",)
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {
+                "request": request,
+                "user": user,
+                "title": "Dashboard",
+                "dashboard": kibak_dashboard_summary(db, user.company_id),
+            },
+        )
+
     setup_operational, enabled_channels = setup_operational_context(db, user.company_id)
     request.state.enabled_channels = enabled_channels
     if not setup_operational:
@@ -436,6 +594,21 @@ def dashboard(
 
     active_mode = mode or tab or "all"
     is_orders_cards = request.url.path.startswith("/orders")
+    if (
+        not is_orders_cards
+        and partial != "workbench"
+        and get_settings().app_slug.strip().lower() == "kibak"
+        and _is_postgresql_session(db)
+    ):
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {
+                "request": request,
+                "user": user,
+                "title": "Dashboard",
+                "dashboard": kibak_dashboard_summary(db, user.company_id),
+            },
+        )
     default_date_range = "" if is_orders_cards else "7d"
     resolved_date_range = date_range or quick_range or default_date_range
     filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "status": status, "email_type": email_type, "score_min": score_min, "score_max": score_max, "scoring_category": scoring_category, "agent_status": agent_status, "date_range": resolved_date_range, "customer_or_sender": customer_or_sender, "has_attachments": has_attachments, "order_status": order_status, "mode": active_mode, "tab": active_mode, "work_status": work_status, "quick_range": resolved_date_range, "has_pdf": has_pdf, "requires_review": requires_review, "issue_type": issue_type, "origin": origin, "sender": sender, "search": search, "reason": reason, "page": page, "page_size": page_size, "sort": sort, "archived": False}
@@ -453,7 +626,13 @@ def dashboard(
     if workbench["items"]:
         featured_process_item = _normalize_featured_process_item(workbench["items"][0])
 
-    template_name = "dashboard/_workbench.html" if partial == "workbench" else "dashboard.html"
+    template_name = (
+        "dashboard/_workbench.html"
+        if partial == "workbench"
+        else "dashboard.html"
+        if _is_kibak_runtime(db)
+        else "dashboard_legacy.html"
+    )
     if is_orders_cards:
         orders_view_query = {key: value for key, value in request.query_params.items() if key != "partial"}
         orders_view_query["view"] = "cards"
@@ -498,6 +677,20 @@ def history_page(
     user: TenantUser = Depends(current_user),
 ):
     start, end = _history_bounds(date_range, date_from, date_to)
+    if _is_kibak_runtime(db):
+        return templates.TemplateResponse(
+            "history/kibak.html",
+            _kibak_history_context(
+                db,
+                user,
+                request=request,
+                search=search,
+                page=page,
+                page_size=page_size,
+                start=start,
+                end=end,
+            ),
+        )
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
     allowed_kind = kind if kind in {"all", "orders", "emails"} else "all"
     allowed_state = state if state in {"all", "current", "review", "ready", "confirmed", "sent", "blocked"} else "all"
@@ -774,6 +967,17 @@ def history_detail_pane(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    if _is_kibak_runtime(db):
+        communication = db.scalar(
+            select(Communication).where(
+                Communication.company_id == user.company_id,
+                Communication.id == item_id,
+            )
+        )
+        return templates.TemplateResponse(
+            "history/_kibak_detail_pane.html",
+            {"request": request, "user": user, "communication": communication},
+        )
     email = None
     order = None
     item = None

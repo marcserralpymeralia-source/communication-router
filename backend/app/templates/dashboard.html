@@ -1,11 +1,97 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_filter, icon_plus %}
-{% set title = "Bandeja" %}
+{% from "components/icons.html" import icon_arrow_right, icon_dashboard, icon_mail, icon_settings %}
+{% set title = "Dashboard" %}
+{% set dashboard = dashboard|default({
+  "kpis": [],
+  "department_distribution": [],
+  "status_distribution": [],
+  "recent": []
+}) %}
 {% block content %}
+<section class="kibak-dashboard page-section">
+  <header class="kibak-hero page-section-header">
+    <div>
+      <span class="kibak-eyebrow">KIBAK</span>
+      <h2>Enrutamiento inteligente de comunicaciones</h2>
+      <p>Una bandeja de comunicaciones clara para saber qué está entrando, quién debe gestionarlo y qué necesita revisión.</p>
+    </div>
+    <a class="button primary" href="/communications/workbench">Ver comunicaciones {{ icon_arrow_right(16) }}</a>
+  </header>
 
-{% include "dashboard/_workbench.html" %}
+  <div class="kibak-kpi-grid" aria-label="Indicadores principales">
+    {% for kpi in dashboard.kpis %}
+      <article class="kibak-kpi">
+        <span class="kibak-kpi-label">{{ kpi.label }}</span>
+        <strong class="kibak-kpi-value">{{ kpi.value }}</strong>
+        <span class="kibak-kpi-meta">{{ kpi.meta }}</span>
+      </article>
+    {% endfor %}
+  </div>
 
-  {% include "components/workbench_detail_modal.html" %}
+  <div class="kibak-dashboard-grid">
+    <section class="panel kibak-panel">
+      <div class="kibak-panel-heading">
+        <div><span class="kibak-panel-kicker">Organización</span><h3>Distribución por departamento</h3></div>
+        {{ icon_dashboard(18) }}
+      </div>
+      {% if dashboard.department_distribution %}
+        <div class="kibak-bars">
+          {% for item in dashboard.department_distribution %}
+            <div class="kibak-bar-row">
+              <div class="kibak-bar-label"><span>{{ item.name }}</span><strong>{{ item.count }}</strong></div>
+              <div class="kibak-bar-track"><span class="kibak-bar-fill" style="width: {{ [item.percentage, 4]|max }}%"></span></div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="kibak-inline-empty">Todavía no hay departamentos con comunicaciones asignadas.</div>
+      {% endif %}
+    </section>
+
+    <section class="panel kibak-panel">
+      <div class="kibak-panel-heading">
+        <div><span class="kibak-panel-kicker">Seguimiento</span><h3>Estado del routing</h3></div>
+        {{ icon_mail(18) }}
+      </div>
+      <div class="kibak-status-list">
+        {% for item in dashboard.status_distribution %}
+          <div class="kibak-status-item"><span class="kibak-status-dot {{ item.class }}"></span><span>{{ item.label }}</span><strong>{{ item.count }}</strong></div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+
+  <section class="panel kibak-panel kibak-activity-panel">
+    <div class="kibak-panel-heading">
+      <div><span class="kibak-panel-kicker">Bandeja de comunicaciones</span><h3>Actividad reciente</h3></div>
+      <a class="text-link" href="/communications/workbench">Ver todo {{ icon_arrow_right(14) }}</a>
+    </div>
+    {% if dashboard.recent %}
+      <div class="kibak-table-wrap">
+        <table class="kibak-activity-table">
+          <thead><tr><th>Fecha</th><th>Remitente</th><th>Asunto</th><th>Departamento</th><th>Confianza</th><th>Estado</th></tr></thead>
+          <tbody>
+          {% for item in dashboard.recent %}
+            <tr>
+              <td>{{ item.received_at|local_dt(tenant_timezone, "%d/%m %H:%M") }}</td>
+              <td class="kibak-sender">{{ item.sender }}</td>
+              <td><a class="kibak-subject" href="{{ item.href }}">{{ item.subject }}</a></td>
+              <td>{{ item.department }}</td>
+              <td>{{ item.confidence }}</td>
+              <td><span class="kibak-status-badge {{ item.status_class }}">{{ item.status_label }}</span></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="kibak-empty-state">
+        <div class="kibak-empty-icon">{{ icon_mail(22) }}</div>
+        <h4>No hay comunicaciones todavía.</h4>
+        <p>Conecta un buzón o carga datos demo para empezar.</p>
+        <a class="button secondary compact-button" href="/settings/mailboxes">{{ icon_settings(15) }} Gestionar buzones</a>
+      </div>
+    {% endif %}
+  </section>
+</section>
 {% endblock %}
-
-{% block page_scripts %}<script src="{{ asset_url('js/workbench-dashboard.js') }}" defer></script>{% endblock %}

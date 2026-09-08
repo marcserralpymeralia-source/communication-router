@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set title = "Configuración" %}
+{% block content %}
+<section class="page-section">
+  <header class="page-section-header">
+    <div>
+      <span class="kibak-eyebrow">KIBAK</span>
+      <h2>Configuración del espacio</h2>
+      <p>Gestiona la identidad, los buzones y el conocimiento que utiliza el routing.</p>
+    </div>
+  </header>
+
+  <div class="settings-modules">
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Empresa</h3><span class="module-state ready">Activa</span></div></div>
+      <p>{{ company.name if company else 'Empresa no configurada' }}{% if company and company.currency %} · {{ company.currency }}{% endif %}</p>
+    </article>
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Inteligencia artificial</h3><span class="module-state {% if llm_configured %}ready{% else %}pending{% endif %}">{{ 'Configurada' if llm_configured else 'Pendiente' }}</span></div></div>
+      <p>{{ llm_provider|capitalize }} · {{ llm_model }}</p>
+      <small class="muted">La clave de proveedor nunca se muestra.</small>
+    </article>
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Buzones</h3><span class="module-state ready">{{ counts.mailboxes }}</span></div></div>
+      <p>Fuentes de entrada aisladas por tenant.</p>
+      <a class="button secondary compact-button" href="/settings/mailboxes">Gestionar buzones</a>
+    </article>
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Departamentos y conocimiento</h3><span class="module-state ready">{{ counts.departments }}</span></div></div>
+      <p>{{ counts.knowledge }} elementos de conocimiento disponibles para orientar el análisis.</p>
+      <a class="button secondary compact-button" href="/departments">Gestionar departamentos</a>
+    </article>
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Prompts y auditoría</h3><span class="module-state ready">{{ counts.prompt_templates }}</span></div></div>
+      <p>{{ counts.prompt_executions }} ejecuciones registradas para trazabilidad del agente.</p>
+    </article>
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Identidad visual</h3><span class="module-state ready">Activa</span></div></div>
+      <p>{{ branding.app_name if branding and branding.app_name else 'KIBAK' }}</p>
+    </article>
+  </div>
+</section>
+{% endblock %}

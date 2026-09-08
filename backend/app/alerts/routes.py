@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
+from app.core.config import get_settings
 from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.db.models import Alert, Email, InboundMessage, Order, utcnow
@@ -188,6 +189,19 @@ def alerts_page(
 
 @router.get("/alerts/summary")
 def alerts_summary(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if get_settings().app_slug.strip().lower() == "kibak" and db.get_bind().dialect.name == "postgresql":
+        return JSONResponse(
+            {
+                "total": 0,
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "info": 0,
+                "has_critical": False,
+                "recent": [],
+            }
+        )
     return JSONResponse(jsonable_encoder(build_alert_center_context(db, user.company_id, limit=10)))
 
 

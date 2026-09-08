@@ -18,7 +18,7 @@ from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
 from app.core.encryption import mask_secret
-from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptTemplate, PromptVersion, ScoringSettings
+from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Department, DepartmentKnowledge, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Mailbox, Order, Product, PromptExecution, PromptTemplate, PromptVersion, ScoringSettings
 from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
@@ -175,6 +175,51 @@ def _backfill_response(request: Request, payload: dict, fallback: str = "/settin
     return RedirectResponse(request.headers.get("referer") or fallback, status_code=303)
 
 
+def _is_kibak_runtime(db: Session) -> bool:
+    get_bind = getattr(db, "get_bind", None)
+    if not callable(get_bind):
+        return False
+    try:
+        return get_settings().app_slug.strip().lower() == "kibak" and get_bind().dialect.name == "postgresql"
+    except AttributeError:
+        return False
+
+
+def _kibak_settings_context(request: Request, db: Session, user: TenantUser) -> dict:
+    company = db.get(Company, user.company_id)
+    branding = db.scalar(select(BrandingSettings).where(BrandingSettings.company_id == user.company_id))
+    llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == user.company_id))
+    prompt_count = db.scalar(select(func.count(PromptTemplate.id)).where(PromptTemplate.company_id == user.company_id)) or 0
+    execution_count = db.scalar(select(func.count(PromptExecution.id)).where(PromptExecution.company_id == user.company_id)) or 0
+    mailbox_count = db.scalar(select(func.count(Mailbox.id)).where(Mailbox.company_id == user.company_id)) or 0
+    department_count = db.scalar(select(func.count(Department.id)).where(Department.company_id == user.company_id)) or 0
+    knowledge_count = db.scalar(
+        select(func.count(DepartmentKnowledge.id)).join(
+            Department, Department.id == DepartmentKnowledge.department_id
+        ).where(Department.company_id == user.company_id)
+    ) or 0
+    provider = (llm.provider if llm else "disabled") or "disabled"
+    model = (llm.classification_model if llm else "") or "Sin modelo configurado"
+    return {
+        "request": request,
+        "user": user,
+        "company": company,
+        "branding": branding,
+        "llm": llm,
+        "llm_provider": provider,
+        "llm_model": model,
+        "llm_configured": bool(llm and llm.api_key_encrypted and provider != "disabled"),
+        "counts": {
+            "mailboxes": mailbox_count,
+            "departments": department_count,
+            "knowledge": knowledge_count,
+            "prompt_templates": prompt_count,
+            "prompt_executions": execution_count,
+        },
+        "title": "Configuración",
+    }
+
+
 def _run_backfill_job_once(request: Request, db: Session, user: TenantUser, job: BackgroundJob, *, from_date: str | None, to_date: str | None) -> dict:
     request_id = getattr(request.state, "request_id", None)
     logger.info(
@@ -247,6 +292,8 @@ def _clone_email_settings_for_preview(db: Session, company_id: int, data: dict) 
 
 @router.get("")
 def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if _is_kibak_runtime(db):
+        return templates.TemplateResponse("settings/kibak.html", _kibak_settings_context(request, db, user))
     llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
     decision_settings = get_or_create_settings(db, DecisionSettings, user.company_id)

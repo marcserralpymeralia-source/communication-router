@@ -5,12 +5,12 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.attachment_extraction import extract_attachment_text
 from app.core.attachment_storage import save_attachment
-from app.db.models import Communication, CommunicationAttachment
+from app.db.models import Communication, CommunicationAttachment, Department, RoutingAction, RoutingDecision
 
 PROCESSING_STATUSES = {"received", "parsing", "processed", "error"}
 ROUTING_STATUSES = {
@@ -20,6 +20,15 @@ ROUTING_STATUSES = {
     "pending_review",
     "routed",
     "routing_error",
+}
+
+WORKBENCH_FILTERS = {
+    "all",
+    "pending_review",
+    "automatic",
+    "reviewed",
+    "unclassified",
+    "error",
 }
 
 
@@ -67,12 +76,86 @@ def list_communications(
     limit: int = 50,
     offset: int = 0,
     routing_status: str | None = None,
+    workbench_filter: str | None = None,
+    search: str | None = None,
 ) -> list[Communication]:
     safe_limit = max(min(int(limit or 50), 100), 1)
     safe_offset = max(int(offset or 0), 0)
     filters = [Communication.company_id == company_id]
     if routing_status and routing_status in ROUTING_STATUSES:
         filters.append(Communication.routing_status == routing_status)
+    if isinstance(search, str) and (term := search.strip()):
+        pattern = f"%{term}%"
+        department_match = exists(
+            select(RoutingDecision.id)
+            .join(
+                Department,
+                or_(
+                    Department.id == RoutingDecision.department_id,
+                    Department.id == RoutingDecision.final_department_id,
+                    Department.id == RoutingDecision.alternative_department_id,
+                ),
+            )
+            .where(
+                RoutingDecision.company_id == company_id,
+                RoutingDecision.communication_id == Communication.id,
+                Department.company_id == company_id,
+                Department.name.ilike(pattern),
+            )
+        )
+        filters.append(
+            or_(
+                Communication.sender_email.ilike(pattern),
+                Communication.sender_name.ilike(pattern),
+                Communication.subject.ilike(pattern),
+                department_match,
+            )
+        )
+    if workbench_filter in WORKBENCH_FILTERS and workbench_filter != "all":
+        active_decision = select(RoutingDecision.id).where(
+            RoutingDecision.company_id == company_id,
+            RoutingDecision.communication_id == Communication.id,
+            RoutingDecision.status != "superseded",
+        )
+        failed_action = exists(
+            select(RoutingAction.id).where(
+                RoutingAction.company_id == company_id,
+                RoutingAction.communication_id == Communication.id,
+                RoutingAction.status == "failed",
+            )
+        )
+        if workbench_filter == "pending_review":
+            filters.append(
+                or_(
+                    Communication.routing_status == "pending_review",
+                    exists(active_decision.where(RoutingDecision.status == "pending_review")),
+                )
+            )
+        elif workbench_filter == "automatic":
+            filters.append(
+                exists(
+                    active_decision.where(
+                        RoutingDecision.status == "routed",
+                        RoutingDecision.source == "agent",
+                        RoutingDecision.requires_review.is_(False),
+                    )
+                )
+            )
+        elif workbench_filter == "reviewed":
+            filters.append(exists(active_decision.where(RoutingDecision.status.in_(("confirmed", "corrected")))))
+        elif workbench_filter == "unclassified":
+            filters.append(
+                Communication.routing_status == "unclassified",
+            )
+            filters.append(~exists(active_decision))
+        elif workbench_filter == "error":
+            filters.append(
+                or_(
+                    Communication.processing_status == "error",
+                    Communication.routing_status == "routing_error",
+                    failed_action,
+                )
+            )
     return db.scalars(
         select(Communication)
         .where(*filters)
