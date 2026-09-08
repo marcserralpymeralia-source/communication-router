@@ -51,7 +51,8 @@ def jobs_cron(request: Request):
 def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db)):
     _cron_authorized(request)
     now = datetime.now(timezone.utc)
-    due_states = master_db.scalars(
+    kibak_runtime = get_settings().app_slug.strip().lower() == "kibak" and master_db.get_bind().dialect.name == "postgresql"
+    due_states = [] if kibak_runtime else master_db.scalars(
         select(EmailSyncState)
         .join(MasterTenantDatabase, MasterTenantDatabase.company_id == EmailSyncState.company_id)
         .where(

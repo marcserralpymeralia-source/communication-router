@@ -39,6 +39,7 @@ from app.settings.integrations import backfill_imap_emails, read_latest_imap_ema
 from app.mailboxes.service import get_or_create_mailbox_sync_state
 from app.settings.service import get_or_create_settings
 from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
+from app.migrations.kibak_baseline import KIBAK_TENANT_BASELINE_VERSION
 from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
 from app.whatsapp.conversation_orders import evaluate_conversation_order
@@ -796,6 +797,12 @@ def _handle_tenant_jobs(
     blocked_jobs = 0
     try:
         schema_report = tenant_migration_report(db, tenant.company_id, persist=False)
+        if (
+            get_settings().app_slug.strip().lower() == "kibak"
+            and schema_report.get("version") == KIBAK_TENANT_BASELINE_VERSION
+            and schema_report.get("status") == "current"
+        ):
+            schema_report["is_current"] = True
         if not schema_report.get("is_current"):
             logger.warning(
                 "tenant schema incompatible company=%s status=%s version=%s checksum=%s",

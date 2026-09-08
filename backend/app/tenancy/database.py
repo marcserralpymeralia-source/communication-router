@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.redirects import login_location_for_request
+from app.core.config import get_settings
 from app.master.database import get_master_db
 from app.master.service import load_tenant_context
 from app.db.database import Base
@@ -52,8 +53,40 @@ def _infer_company_id(engine) -> int | None:  # noqa: ANN001
     return int(value) if value is not None else None
 
 
+def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
+    from app.migrations.kibak_baseline import KIBAK_TENANT_BASELINE_VERSION, KIBAK_TENANT_TABLES
+
+    table_names = set(inspect(engine).get_table_names())
+    missing_tables = sorted(KIBAK_TENANT_TABLES - table_names)
+    if missing_tables:
+        raise RuntimeError(f"KIBAK tenant schema incomplete: {', '.join(missing_tables)}")
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT version, name, checksum, execution_ms, application_version, status, "
+                "applied_at, last_checked_at, last_error, notes "
+                "FROM schema_migrations "
+                "WHERE (:company_id IS NULL OR company_id = :company_id) "
+                "ORDER BY applied_at DESC NULLS LAST, id DESC LIMIT 1"
+            ),
+            {"company_id": company_id},
+        ).mappings().first()
+    if row is None or row["version"] != KIBAK_TENANT_BASELINE_VERSION:
+        version = row["version"] if row else None
+        raise RuntimeError(f"Version desconocida en schema_migrations: {version}")
+    return {
+        **dict(row),
+        "current_version": KIBAK_TENANT_BASELINE_VERSION,
+        "current_name": "KIBAK tenant baseline",
+        "current_checksum": KIBAK_TENANT_BASELINE_VERSION,
+        "is_current": row["status"] == "current" and row["checksum"] in {None, KIBAK_TENANT_BASELINE_VERSION},
+    }
+
+
 def ensure_tenant_schema(database_url: str, *, company_id: int | None = None, application_version: str | None = None, baseline: bool = False) -> dict:
     engine = get_tenant_engine(database_url)
+    if get_settings().app_slug.strip().lower() == "kibak" and not database_url.startswith("sqlite"):
+        return _validate_kibak_baseline(engine, company_id)
     Base.metadata.create_all(bind=engine)
     resolved_company_id = company_id if company_id is not None else _infer_company_id(engine)
     if resolved_company_id is None:

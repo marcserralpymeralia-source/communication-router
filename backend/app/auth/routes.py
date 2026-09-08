@@ -61,7 +61,14 @@ def login(
     request.session["membership_id"] = user.membership_id
     request.session["company_slug"] = user.company_slug
 
-    if next_url == DEFAULT_LOGIN_DESTINATION and getattr(user, "database_url", None):
+    if (
+        next_url == DEFAULT_LOGIN_DESTINATION
+        and getattr(user, "database_url", None)
+        and (
+            get_settings().app_slug.strip().lower() != "kibak"
+            or not str(user.database_url).startswith("postgresql")
+        )
+    ):
         TenantSession = tenant_db_session(user.database_url)
         tenant_db = TenantSession()
         try:

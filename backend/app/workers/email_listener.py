@@ -192,6 +192,7 @@ def run_email_listener_once(*, owner: str | None = None, force: bool = False) ->
     owner = owner or _identity()
     master_db = master_database.MasterSessionLocal()
     results: list[dict] = []
+    kibak_runtime = get_settings().app_slug.strip().lower() == "kibak" and master_db.get_bind().dialect.name == "postgresql"
     try:
         tenants = master_db.scalars(
             select(MasterTenantDatabase).where(
@@ -200,15 +201,16 @@ def run_email_listener_once(*, owner: str | None = None, force: bool = False) ->
             )
         ).all()
         for tenant in tenants:
-            state = _state_for_company(master_db, tenant.company_id)
-            legacy_due = force or (
-                state.enabled and not (state.next_run_at and state.next_run_at > _now())
-            )
-            if legacy_due:
-                result = reconcile_tenant_email(master_db, tenant, owner=owner, force=force)
-                state.next_run_at = _now() + timedelta(seconds=max(state.frequency_seconds or 60, 30))
-                master_db.commit()
-                results.append({"company_id": tenant.company_id, **result})
+            if not kibak_runtime:
+                state = _state_for_company(master_db, tenant.company_id)
+                legacy_due = force or (
+                    state.enabled and not (state.next_run_at and state.next_run_at > _now())
+                )
+                if legacy_due:
+                    result = reconcile_tenant_email(master_db, tenant, owner=owner, force=force)
+                    state.next_run_at = _now() + timedelta(seconds=max(state.frequency_seconds or 60, 30))
+                    master_db.commit()
+                    results.append({"company_id": tenant.company_id, **result})
 
             mailbox_states = master_db.scalars(
                 select(MailboxSyncState).where(MailboxSyncState.company_id == tenant.company_id)
@@ -260,9 +262,10 @@ def run_email_listener_forever() -> None:
         time.sleep(poll_seconds)
     master_db = master_database.MasterSessionLocal()
     try:
-        states = master_db.scalars(select(EmailSyncState).where(EmailSyncState.listener_owner == owner)).all()
-        for state in states:
-            mark_listener_inactive(master_db, state, owner=owner)
+        if not (get_settings().app_slug.strip().lower() == "kibak" and master_db.get_bind().dialect.name == "postgresql"):
+            states = master_db.scalars(select(EmailSyncState).where(EmailSyncState.listener_owner == owner)).all()
+            for state in states:
+                mark_listener_inactive(master_db, state, owner=owner)
         mailbox_states = master_db.scalars(select(MailboxSyncState).where(MailboxSyncState.listener_owner == owner)).all()
         for state in mailbox_states:
             mark_listener_inactive(master_db, state, owner=owner)

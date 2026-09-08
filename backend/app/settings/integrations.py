@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.agent.prompt_runtime import run_prompt_execution
 from app.communications.service import add_communication_attachment, create_or_update_communication_from_email, mark_communication_processed
 from app.routing.auto import enqueue_automatic_routing
+from app.core.config import get_settings
 from app.core.encryption import decrypt_secret
 from app.db.models import Communication, Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
 from app.master.models import EmailSyncState, MailboxSyncState
@@ -662,6 +663,13 @@ def _fetch_imap_emails(
     batch_size: int | None = None,
     stop_after_batch: bool = False,
 ) -> dict:
+    get_bind = getattr(db, "get_bind", None)
+    kibak_runtime = bool(
+        get_settings().app_slug.strip().lower() == "kibak"
+        and mailbox_id is not None
+        and callable(get_bind)
+        and get_bind().dialect.name == "postgresql"
+    )
     password = decrypt_secret(settings.imap_password_encrypted)
     if not settings.imap_host or not settings.imap_username or not password:
         return {"ok": False, "found": 0, "saved": 0, "message": "Faltan host, usuario o password IMAP."}
@@ -827,23 +835,33 @@ def _fetch_imap_emails(
                     msg = message_from_bytes(raw, policy=policy.default)
                     message_id = msg.get("Message-ID") or None
                     dedupe_external_id = _normalized_email_external_id(mailbox, uidvalidity, uid, mailbox_id)
-                    exists = _existing_email_for_imap(
-                        db,
-                        company_id=company_id,
-                        mailbox=mailbox,
-                        uidvalidity=uidvalidity,
-                        uid=uid,
-                        message_id=message_id,
-                        external_id=dedupe_external_id,
-                        mailbox_id=mailbox_id,
-                    )
+                    if kibak_runtime:
+                        exists = db.scalar(
+                            select(Communication).where(
+                                Communication.company_id == company_id,
+                                Communication.mailbox_id == mailbox_id,
+                                Communication.provider == (settings.provider or "imap").strip().lower(),
+                                Communication.external_message_id.in_([message_id, dedupe_external_id] if message_id else [dedupe_external_id]),
+                            )
+                        )
+                    else:
+                        exists = _existing_email_for_imap(
+                            db,
+                            company_id=company_id,
+                            mailbox=mailbox,
+                            uidvalidity=uidvalidity,
+                            uid=uid,
+                            message_id=message_id,
+                            external_id=dedupe_external_id,
+                            mailbox_id=mailbox_id,
+                        )
                     if exists:
                         duplicates += 1
                         processed_since_checkpoint += 1
                         last_processed_uid = uid
                         if sync_state:
                             sync_state.backfill_last_uid = uid
-                        log_action(db, company_id=company_id, user=None, action="email.duplicate_ignored", entity_type="email", entity_id=exists.id, message=f"Duplicado ignorado: {message_id or dedupe_external_id}")
+                        log_action(db, company_id=company_id, user=None, action="email.duplicate_ignored", entity_type="communication" if kibak_runtime else "email", entity_id=exists.id, message=f"Duplicado ignorado: {message_id or dedupe_external_id}")
                         continue
                     subject = _decode_mime_header(msg.get("Subject", ""))
                     sender = _decode_mime_header(msg.get("From", ""))
@@ -851,6 +869,50 @@ def _fetch_imap_emails(
                     # retaining the original HTML for Communications.
                     body = _extract_body(msg)
                     body_html = _extract_body_parts(msg)[1]
+                    if kibak_runtime:
+                        sender_name, sender_email = parseaddr(sender)
+                        communication = create_or_update_communication_from_email(
+                            db,
+                            company_id=company_id,
+                            mailbox_id=mailbox_id,
+                            provider=settings.provider or "imap",
+                            external_message_id=message_id or dedupe_external_id,
+                            thread_id=msg.get("In-Reply-To") or msg.get("References"),
+                            sender_email=sender_email or None,
+                            sender_name=_decode_mime_header(sender_name) or None,
+                            to_recipients=_header_addresses(msg, "To"),
+                            cc_recipients=_header_addresses(msg, "Cc"),
+                            bcc_recipients=_header_addresses(msg, "Bcc"),
+                            subject=subject,
+                            body_text=body,
+                            body_html=body_html,
+                            metadata={
+                                "message_id": message_id,
+                                "imap_mailbox": mailbox,
+                                "imap_uidvalidity": uidvalidity,
+                                "imap_uid": uid,
+                            },
+                        )
+                        attachment_count = _save_communication_attachments(
+                            db,
+                            company_id,
+                            communication,
+                            msg,
+                            max_attachments=IMAP_MAX_ATTACHMENTS_PER_EMAIL,
+                            max_attachment_size_mb=IMAP_MAX_ATTACHMENT_SIZE_MB,
+                        )
+                        mark_communication_processed(db, communication)
+                        attachments_saved += attachment_count
+                        processed_communication_ids.append(communication.id)
+                        saved += 1
+                        processed_since_checkpoint += 1
+                        last_processed_uid = uid
+                        if sync_state:
+                            sync_state.backfill_last_uid = uid
+                        log_action(db, company_id=company_id, user=None, action="email.saved", entity_type="communication", entity_id=communication.id, message=f"Comunicación guardada: {subject[:120]}")
+                        if settings.mark_as_read_after_import:
+                            client.uid("store", msg_id, "+FLAGS", "\\Seen")
+                        continue
                     email = Email(
                         company_id=company_id,
                         external_id=dedupe_external_id,
@@ -1452,6 +1514,44 @@ def _save_attachments(
                 storage_ref=storage_path,
                 metadata={"content_disposition": part.get_content_disposition()},
             )
+        count += 1
+    return count
+
+
+def _save_communication_attachments(
+    db: Session,
+    company_id: int,
+    communication: Communication,
+    msg: EmailMessage,
+    *,
+    max_attachments: int = IMAP_MAX_ATTACHMENTS_PER_EMAIL,
+    max_attachment_size_mb: int = IMAP_MAX_ATTACHMENT_SIZE_MB,
+) -> int:
+    count = 0
+    for part in msg.walk():
+        if not _is_attachment(part):
+            continue
+        if count >= max_attachments:
+            break
+        payload = part.get_payload(decode=True)
+        if not payload or len(payload) > max_attachment_size_mb * 1024 * 1024:
+            continue
+        filename = _safe_filename(part.get_filename() or f"adjunto-{count + 1}")
+        content_type = part.get_content_type() or "application/octet-stream"
+        storage_path = save_attachment(
+            filename=f"communication-{communication.id}-{filename}",
+            payload=payload,
+            content_type=content_type,
+        )
+        add_communication_attachment(
+            db,
+            communication,
+            filename=filename,
+            mime_type=content_type,
+            payload=payload,
+            storage_ref=storage_path,
+            metadata={"content_disposition": part.get_content_disposition()},
+        )
         count += 1
     return count
 
