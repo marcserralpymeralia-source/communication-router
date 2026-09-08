@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% set title = "Primeros pasos" %}
+{% block content %}
+<section class="page-section onboarding-shell">
+  <header class="page-section-header">
+    <div>
+      <span class="kibak-eyebrow">KIBAK</span>
+      <h2>Configura tu espacio de trabajo</h2>
+      <p>Completa estos pasos cuando quieras. Puedes volver a esta checklist desde Configuración.</p>
+    </div>
+    <a class="button secondary" href="/settings">Configuración</a>
+  </header>
+
+  <section class="onboarding-progress panel">
+    <div class="onboarding-progress-head"><div><strong>{{ completed_steps }} de {{ total_steps }} pasos</strong><span>La automatización permanece desactivada hasta que decidas activarla.</span></div><strong>{{ progress_percent }}%</strong></div>
+    <div class="onboarding-progress-track"><span style="width: {{ progress_percent }}%"></span></div>
+  </section>
+
+  <section class="onboarding-steps" aria-label="Checklist de configuración">
+    {% for step in steps %}
+      <article class="onboarding-step panel {% if step.complete %}is-complete{% elif next_step and step.key == next_step.key %}is-current{% endif %}">
+        <div class="onboarding-step-mark">{% if step.complete %}✓{% else %}{{ loop.index }}{% endif %}</div>
+        <div class="onboarding-step-copy"><span class="onboarding-step-label">{{ step.label }}</span><strong>{{ step.status }}</strong><p>{{ step.detail }}</p></div>
+        <a class="button secondary compact-button" href="{{ step.href }}">{{ "Revisar" if step.complete else "Configurar" }}</a>
+      </article>
+    {% endfor %}
+  </section>
+
+  {% if next_step %}
+    <section class="onboarding-next panel"><div><span class="kibak-eyebrow">Siguiente paso</span><h3>{{ next_step.label }}</h3><p>{{ next_step.detail }}</p></div><a class="button primary" href="{{ next_step.href }}">Continuar</a></section>
+  {% else %}
+    <section class="onboarding-next panel"><div><span class="kibak-eyebrow">Espacio preparado</span><h3>Ya puedes operar KIBAK</h3><p>Revisa las comunicaciones y activa automatizaciones solo cuando el equipo esté preparado.</p></div><a class="button primary" href="/communications/workbench">Abrir comunicaciones</a></section>
+  {% endif %}
+</section>
+{% endblock %}

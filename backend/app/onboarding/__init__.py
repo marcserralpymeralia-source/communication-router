@@ -1,0 +1,1 @@
+"""KIBAK onboarding pages."""

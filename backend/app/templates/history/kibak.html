@@ -14,34 +14,47 @@
   <div class="kibak-kpi-grid">
     <article class="kibak-kpi"><span class="kibak-kpi-label">Comunicaciones</span><strong class="kibak-kpi-value">{{ summary.communications }}</strong><span class="kibak-kpi-meta">En el periodo seleccionado</span></article>
     <article class="kibak-kpi"><span class="kibak-kpi-label">Correcciones</span><strong class="kibak-kpi-value">{{ summary.corrections }}</strong><span class="kibak-kpi-meta">Ajustes manuales registrados</span></article>
-    <article class="kibak-kpi"><span class="kibak-kpi-label">Acciones</span><strong class="kibak-kpi-value">{{ summary.actions }}</strong><span class="kibak-kpi-meta">Acciones de routing creadas</span></article>
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Derivaciones</span><strong class="kibak-kpi-value">{{ summary.actions }}</strong><span class="kibak-kpi-meta">Acciones de routing creadas</span></article>
   </div>
 
   <section class="panel table-panel">
-    <form class="toolbar" method="get" action="/history">
+    <form class="toolbar history-filters" method="get" action="/history">
       <label class="sr-only" for="history-search">Buscar</label>
       <input id="history-search" type="search" name="search" value="{{ search }}" placeholder="Buscar por asunto o remitente">
-      <button class="button secondary" type="submit">Buscar</button>
+      <label><span>Periodo</span><select name="date_range"><option value="7d" {% if filters.date_range == '7d' %}selected{% endif %}>7 días</option><option value="30d" {% if filters.date_range == '30d' %}selected{% endif %}>30 días</option><option value="90d" {% if filters.date_range == '90d' %}selected{% endif %}>90 días</option><option value="all" {% if filters.date_range == 'all' %}selected{% endif %}>Todo</option></select></label>
+      <label><span>Desde</span><input type="date" name="date_from" value="{{ filters.date_from }}"></label>
+      <label><span>Hasta</span><input type="date" name="date_to" value="{{ filters.date_to }}"></label>
+      <label><span>Departamento</span><select name="department_id"><option value="">Todos</option>{% for department in departments %}<option value="{{ department.id }}" {% if filters.department_id|string == department.id|string %}selected{% endif %}>{{ department.name }}</option>{% endfor %}</select></label>
+      <label><span>Categoría</span><select name="kind"><option value="all">Todas</option>{% for category in categories %}<option value="{{ category }}" {% if filters.kind == category %}selected{% endif %}>{{ category }}</option>{% endfor %}</select></label>
+      <label><span>Estado</span><select name="state"><option value="all" {% if filters.state == 'all' %}selected{% endif %}>Todos</option><option value="review" {% if filters.state == 'review' %}selected{% endif %}>Revisión</option><option value="reviewed" {% if filters.state == 'reviewed' %}selected{% endif %}>Revisadas</option><option value="automatic" {% if filters.state == 'automatic' %}selected{% endif %}>Automáticas</option><option value="error" {% if filters.state == 'error' %}selected{% endif %}>Con error</option></select></label>
+      <label><span>Origen</span><select name="source"><option value="all">Todos</option>{% for item in sources %}<option value="{{ item }}" {% if filters.source == item %}selected{% endif %}>{{ item|capitalize }}</option>{% endfor %}</select></label>
+      <button class="button secondary" type="submit">Filtrar</button>
+      <a class="button ghost" href="/history">Limpiar</a>
     </form>
     {% if items %}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Comunicación</th><th>Remitente</th><th>Departamento</th><th>Estado</th><th>Recibida</th></tr></thead>
+          <thead><tr><th>Comunicación</th><th>Remitente</th><th>Categoría</th><th>Departamento</th><th>Estado</th><th>Origen</th><th>Recibida</th></tr></thead>
           <tbody>
             {% for item in items %}
               <tr>
                 <td><a href="/communications/workbench/{{ item.id }}">{{ item.subject }}</a></td>
                 <td>{{ item.sender }}</td>
+                <td>{{ item.category }}</td>
                 <td>{{ item.department }}</td>
                 <td><span class="badge">{{ item.routing_status_label }}</span></td>
-                <td>{{ item.received_at.strftime('%d/%m/%Y %H:%M') if item.received_at else 'Sin fecha' }}</td>
+                <td>{{ item.source|capitalize }}</td>
+                <td>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "Sin fecha") }}</td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+      {% if pagination.total_pages > 1 %}
+        <div class="pagination-row"><span>{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span><div>{% if pagination.previous_url %}<a class="button ghost compact-button" href="{{ pagination.previous_url }}">Anterior</a>{% endif %}{% if pagination.next_url %}<a class="button ghost compact-button" href="{{ pagination.next_url }}">Siguiente</a>{% endif %}</div></div>
+      {% endif %}
     {% else %}
-      <div class="empty-state"><h3>Aún no hay historial</h3><p>Las comunicaciones procesadas aparecerán aquí.</p><a class="button secondary" href="/communications/workbench">Ir a comunicaciones</a></div>
+      <div class="empty-state"><h3>No hay comunicaciones con estos filtros</h3><p>Cuando lleguen nuevos mensajes aparecerán aquí con su estado de routing y trazabilidad.</p><a class="button secondary" href="/settings/mailboxes">Configurar buzones</a><a class="button ghost" href="/onboarding">Ver primeros pasos</a></div>
     {% endif %}
   </section>
 </section>

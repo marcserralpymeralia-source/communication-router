@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% set title = "Operaciones" %}
+{% block content %}
+<section class="page-section operations-shell">
+  <header class="page-section-header">
+    <div><span class="kibak-eyebrow">KIBAK</span><h2>Centro de operaciones</h2><p>Supervisa sincronización, routing y derivaciones sin consultar la terminal.</p></div>
+    <div class="stack-inline"><a class="button secondary" href="/settings/mailboxes">Buzones</a><a class="button secondary" href="/jobs/monitor">Ver trabajos</a></div>
+  </header>
+
+  <div class="kibak-kpi-grid operations-kpis">
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Jobs pendientes</span><strong class="kibak-kpi-value">{{ counts.pending }}</strong><span class="kibak-kpi-meta">En cola o ejecutándose</span></article>
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Jobs fallidos</span><strong class="kibak-kpi-value">{{ counts.failed }}</strong><span class="kibak-kpi-meta">Revisables desde aquí</span></article>
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Errores de routing</span><strong class="kibak-kpi-value">{{ counts.routing_errors }}</strong><span class="kibak-kpi-meta">Comunicaciones bloqueadas</span></article>
+    <article class="kibak-kpi"><span class="kibak-kpi-label">Errores de derivación</span><strong class="kibak-kpi-value">{{ counts.forwarding_errors }}</strong><span class="kibak-kpi-meta">Requieren intervención</span></article>
+  </div>
+
+  <div class="operations-grid">
+    <section class="panel operations-panel"><div class="section-title-row"><div><span class="kibak-eyebrow">Workers</span><h3>Actividad de sincronización</h3></div><span class="module-state {% if worker.status == 'Activo' %}ready{% else %}pending{% endif %}">{{ worker.status }}</span></div><p class="muted">Última actividad: {{ worker.last_activity }}</p><div class="operations-sync-list">{% for item in sync_rows %}<div class="operations-sync-row"><div><strong>{{ item.name }}</strong><span>{{ item.status_label }} · {{ item.last_activity }}</span></div><span class="badge {% if item.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activo" if item.enabled else "Pausado" }}</span>{% if item.error %}<small class="operation-error">{{ item.error }}</small>{% endif %}</div>{% else %}<div class="empty-state compact-empty"><h4>No hay buzones sincronizables.</h4><p>Conecta un buzón para ver su actividad aquí.</p><a class="button secondary compact-button" href="/settings/mailboxes">Configurar buzón</a></div>{% endfor %}</div></section>
+    <section class="panel operations-panel"><div class="section-title-row"><div><span class="kibak-eyebrow">Últimas ejecuciones</span><h3>Trabajos recientes</h3></div><span class="badge">{{ recent_jobs|length }}</span></div><div class="operations-job-list">{% for job in recent_jobs %}<div class="operations-job-row"><div><strong>{{ job.type }}</strong><span>Job #{{ job.id }} · {{ job.updated_at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</span>{% if job.error %}<small class="operation-error">{{ job.error }}</small>{% endif %}</div><div class="operations-job-status"><span class="badge">{{ job.status_label }}</span><small>{{ job.operation_status }}</small>{% if job.retryable %}<form method="post" action="/jobs/{{ job.id }}/retry"><button class="button secondary compact-button" type="submit">Reintentar</button></form>{% endif %}</div></div>{% else %}<div class="empty-state compact-empty"><h4>No hay incidencias operativas.</h4><p>Las ejecuciones aparecerán aquí cuando haya actividad.</p></div>{% endfor %}</div></section>
+  </div>
+</section>
+{% endblock %}

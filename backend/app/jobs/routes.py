@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import current_user
+from app.auth.dependencies import current_user, require_tenant_role
 from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.db.models import AuditLog, BackgroundJob, JobAttempt
@@ -262,7 +262,7 @@ def jobs_detail(job_id: int, db: Session = Depends(get_tenant_db), user: TenantU
 
 
 @router.post("/{job_id}/retry")
-def jobs_retry(request: Request, job_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def jobs_retry(request: Request, job_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(require_tenant_role("Administrador", "Supervisor", "Superadmin"))):
     job = retry_job(db, user.company_id, job_id)
     if not job:
         return JSONResponse({"detail": "No encontrado"}, status_code=404)
@@ -271,7 +271,7 @@ def jobs_retry(request: Request, job_id: int, db: Session = Depends(get_tenant_d
 
 
 @router.post("/{job_id}/cancel")
-def jobs_cancel(request: Request, job_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def jobs_cancel(request: Request, job_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(require_tenant_role("Administrador", "Supervisor", "Superadmin"))):
     job = cancel_job(db, user.company_id, job_id)
     if not job:
         return JSONResponse({"detail": "No encontrado"}, status_code=404)

@@ -64,7 +64,7 @@ class OperationalNavigationTests(unittest.TestCase):
                 self.assertIn(f'class="nav-label">{label}</span>', nav_html)
             self.assertEqual(
                 re.findall(r'class="nav-label">([^<]+)</span>', nav_html),
-                ["Dashboard", "Comunicaciones", "Departamentos", "Buzones", "Historial", "Configuración"],
+        ["Dashboard", "Comunicaciones", "Departamentos", "Buzones", "Historial", "Operaciones", "Configuración"],
             )
 
             for hidden_label in ("Pedidos", "Archivos", "Entradas", "Jobs", "Logs", "Bases de datos", "Diagnóstico", "Aprendizaje", "Canales", "Clientes", "Productos", "WhatsApp"):

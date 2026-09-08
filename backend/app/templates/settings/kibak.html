@@ -8,14 +8,15 @@
       <h2>Configuración del espacio</h2>
       <p>Gestiona la identidad, los buzones y el conocimiento que utiliza el routing.</p>
     </div>
+    <a class="button secondary" href="/onboarding">Checklist de primeros pasos</a>
   </header>
 
   <div class="settings-modules">
-    <article class="module-card panel">
+    <article class="module-card panel" id="company">
       <div class="module-card-head"><div><h3>Empresa</h3><span class="module-state ready">Activa</span></div></div>
       <p>{{ company.name if company else 'Empresa no configurada' }}{% if company and company.currency %} · {{ company.currency }}{% endif %}</p>
     </article>
-    <article class="module-card panel">
+    <article class="module-card panel" id="ai">
       <div class="module-card-head"><div><h3>Inteligencia artificial</h3><span class="module-state {% if llm_configured %}ready{% else %}pending{% endif %}">{{ 'Configurada' if llm_configured else 'Pendiente' }}</span></div></div>
       <p>{{ llm_provider|capitalize }} · {{ llm_model }}</p>
       <small class="muted">La clave de proveedor nunca se muestra.</small>
@@ -24,6 +25,11 @@
       <div class="module-card-head"><div><h3>Buzones</h3><span class="module-state ready">{{ counts.mailboxes }}</span></div></div>
       <p>Fuentes de entrada aisladas por tenant.</p>
       <a class="button secondary compact-button" href="/settings/mailboxes">Gestionar buzones</a>
+    </article>
+    <article class="module-card panel" id="automation">
+      <div class="module-card-head"><div><h3>Automatización</h3><span class="module-state {% if automation.auto_routing_enabled or automation.auto_forwarding_enabled %}ready{% else %}pending{% endif %}">{{ 'Activa' if automation.auto_routing_enabled or automation.auto_forwarding_enabled else 'Desactivada' }}</span></div></div>
+      <p>Routing automático: {{ 'Activo' if automation.auto_routing_enabled else 'Inactivo' }} · Derivaciones automáticas: {{ 'Activo' if automation.auto_forwarding_enabled else 'Inactivo' }}</p>
+      <a class="button secondary compact-button" href="/operations">Abrir operaciones</a>
     </article>
     <article class="module-card panel">
       <div class="module-card-head"><div><h3>Departamentos y conocimiento</h3><span class="module-state ready">{{ counts.departments }}</span></div></div>

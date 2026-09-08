@@ -7954,6 +7954,58 @@ dialog.settings-drawer .grid-4-cols {
   .kibak-panel { padding: 16px; }
 }
 
+/* KIBAK product setup and operations */
+.onboarding-shell, .operations-shell { display: grid; gap: 16px; }
+.onboarding-progress { display: grid; gap: 10px; padding: 16px 18px; }
+.onboarding-progress-head { display: flex; justify-content: space-between; gap: 16px; color: var(--text); }
+.onboarding-progress-head div { display: grid; gap: 3px; }
+.onboarding-progress-head span { color: var(--muted); font-size: 12px; }
+.onboarding-progress-track { height: 8px; overflow: hidden; border-radius: 99px; background: #e8f1ef; }
+.onboarding-progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.onboarding-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.onboarding-step { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 16px; }
+.onboarding-step-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #c9d9d5; border-radius: 50%; color: var(--muted); font-weight: 800; }
+.onboarding-step.is-complete .onboarding-step-mark { border-color: #8ac9ae; background: #eaf8f0; color: #166534; }
+.onboarding-step.is-current { border-color: #8ab8ae; box-shadow: 0 0 0 2px rgba(18, 58, 50, .08); }
+.onboarding-step-copy { min-width: 0; }
+.onboarding-step-label { display: block; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.onboarding-step-copy strong { display: block; margin-top: 3px; color: var(--text); font-size: 14px; }
+.onboarding-step-copy p { margin: 4px 0 0; color: var(--muted); }
+.onboarding-next { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; }
+.onboarding-next h3 { margin: 4px 0; font-size: 17px; }
+.onboarding-next p { margin: 0; color: var(--muted); }
+.operations-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.operations-panel { min-width: 0; padding: 18px; }
+.operations-sync-list, .operations-job-list { display: grid; gap: 2px; margin-top: 14px; }
+.operations-sync-row, .operations-job-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.operations-sync-row > div, .operations-job-row > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.operations-sync-row span, .operations-job-row span, .operations-job-row small { color: var(--muted); font-size: 11px; }
+.operations-sync-row strong, .operations-job-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operations-sync-row .operation-error, .operations-job-row .operation-error { color: var(--danger); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operations-job-status { display: grid; justify-items: end; align-content: start; gap: 5px; }
+.operations-job-status form { margin: 2px 0 0; }
+.compact-empty { padding: 22px 10px; }
+.history-filters { display: grid; grid-template-columns: minmax(180px, 1.6fr) repeat(4, minmax(110px, 1fr)) repeat(3, minmax(100px, 1fr)) auto auto; align-items: end; gap: 8px; }
+.history-filters label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.history-filters input, .history-filters select { min-width: 0; }
+.pagination-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 14px; color: var(--muted); }
+.pagination-row > div { display: flex; gap: 6px; }
+
+@media (max-width: 980px) {
+  .history-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .history-filters input[type="search"] { grid-column: span 2; }
+  .operations-grid, .onboarding-steps { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+  .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-filters input[type="search"] { grid-column: span 2; }
+  .onboarding-step { grid-template-columns: 34px minmax(0, 1fr); }
+  .onboarding-step .button { grid-column: 2; justify-self: start; }
+  .onboarding-next { align-items: flex-start; flex-direction: column; }
+  .pagination-row { align-items: flex-start; flex-direction: column; }
+}
+
 /* Communications demo workspace */
 .sr-only {
   position: absolute;

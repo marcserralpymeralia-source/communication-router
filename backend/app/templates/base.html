@@ -50,6 +50,7 @@
       {% set href_departments = '/departments' %}
       {% set href_mailboxes = '/settings/mailboxes' %}
       {% set href_history = '/history' %}
+      {% set href_operations = '/operations' %}
       {% set href_settings = '/settings' %}
       <nav class="nav">
         <a href="{{ href_dashboard }}" title="Dashboard" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">{{ icon_dashboard(20) }}</span><span class="nav-label">Dashboard</span></a>
@@ -57,6 +58,9 @@
         <a href="{{ href_departments }}" title="Departamentos" class="{% if request.url.path.startswith('/departments') %}active{% endif %}"><span class="nav-icon">{{ icon_book_open(20) }}</span><span class="nav-label">Departamentos</span></a>
         <a href="{{ href_mailboxes }}" title="Buzones" class="{% if request.url.path.startswith('/settings/mailboxes') %}active{% endif %}"><span class="nav-icon">{{ icon_mail(20) }}</span><span class="nav-label">Buzones</span></a>
         <a href="{{ href_history }}" title="Historial" class="{% if request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">{{ icon_list(20) }}</span><span class="nav-label">Historial</span></a>
+        {% if user.role.name in ["Administrador", "Supervisor", "Superadmin"] %}
+          <a href="{{ href_operations }}" title="Operaciones" class="{% if request.url.path.startswith('/operations') %}active{% endif %}"><span class="nav-icon">{{ icon_refresh(20) }}</span><span class="nav-label">Operaciones</span></a>
+        {% endif %}
         {% if user.role.name in ["Administrador", "Superadmin"] %}
           <a href="{{ href_settings }}" title="Configuración" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(20) }}</span><span class="nav-label">Configuración</span></a>
         {% endif %}

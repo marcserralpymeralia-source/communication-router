@@ -50,6 +50,13 @@ def _is_kibak_runtime(db: Session) -> bool:
     return get_settings().app_slug.strip().lower() == "kibak" and _is_postgresql_session(db)
 
 
+def _history_pagination_url(request: Request, page: int, page_size: int) -> str:
+    query = dict(request.query_params)
+    query["page"] = page
+    query["page_size"] = page_size
+    return f"/history?{urlencode(query)}"
+
+
 def _kibak_history_context(
     db: Session,
     user: TenantUser,
@@ -60,6 +67,10 @@ def _kibak_history_context(
     page_size: int,
     start: datetime | None,
     end: datetime | None,
+    department_id: int | None,
+    kind: str,
+    state: str,
+    source: str,
 ) -> dict:
     filters = [Communication.company_id == user.company_id]
     if start:
@@ -73,6 +84,50 @@ def _kibak_history_context(
                 Communication.subject.ilike(pattern),
                 Communication.sender_email.ilike(pattern),
                 Communication.sender_name.ilike(pattern),
+            )
+        )
+    decision_scope = select(RoutingDecision.id).where(
+        RoutingDecision.company_id == Communication.company_id,
+        RoutingDecision.communication_id == Communication.id,
+        RoutingDecision.status != "superseded",
+    )
+    if department_id:
+        filters.append(
+            exists(
+                decision_scope.where(
+                    or_(
+                        RoutingDecision.department_id == department_id,
+                        RoutingDecision.alternative_department_id == department_id,
+                        RoutingDecision.final_department_id == department_id,
+                    )
+                )
+            )
+        )
+    if kind and kind != "all":
+        filters.append(exists(decision_scope.where(or_(RoutingDecision.category == kind, RoutingDecision.final_category == kind))))
+    if source and source != "all":
+        filters.append(exists(decision_scope.where(RoutingDecision.source == source)))
+    if state == "review":
+        filters.append(
+            or_(
+                Communication.routing_status == "pending_review",
+                exists(decision_scope.where(or_(RoutingDecision.requires_review.is_(True), RoutingDecision.status == "pending_review"))),
+            )
+        )
+    elif state == "automatic":
+        filters.append(exists(decision_scope.where(RoutingDecision.status == "routed", RoutingDecision.requires_review.is_(False))))
+    elif state == "reviewed":
+        filters.append(
+            or_(
+                Communication.routing_status == "reviewed",
+                exists(decision_scope.where(RoutingDecision.status.in_(("confirmed", "corrected", "reviewed")))),
+            )
+        )
+    elif state == "error":
+        filters.append(
+            or_(
+                Communication.processing_status == "error",
+                Communication.routing_status.in_(("error", "routing_error")),
             )
         )
     page, page_size = normalize_page(page, page_size)
@@ -101,6 +156,11 @@ def _kibak_history_context(
     decision_by_communication = {}
     for decision in decisions:
         decision_by_communication.setdefault(decision.communication_id, decision)
+    all_departments = db.scalars(
+        select(Department)
+        .where(Department.company_id == user.company_id, Department.active.is_(True))
+        .order_by(Department.name)
+    ).all()
     department_ids = {
         department_id
         for decision in decisions
@@ -108,12 +168,7 @@ def _kibak_history_context(
         if department_id
     }
     departments = (
-        db.scalars(
-            select(Department).where(
-                Department.company_id == user.company_id,
-                Department.id.in_(department_ids),
-            )
-        ).all()
+        db.scalars(select(Department).where(Department.company_id == user.company_id, Department.id.in_(department_ids))).all()
         if department_ids
         else []
     )
@@ -139,6 +194,8 @@ def _kibak_history_context(
                 "department": department_names.get(department_id, "Sin departamento"),
                 "confidence": decision.confidence if decision else None,
                 "reason": decision.reason if decision else None,
+                "category": (decision.final_category or decision.category) if decision else "Sin categoría",
+                "source": decision.source if decision else "unknown",
             }
         )
     correction_count = db.scalar(
@@ -153,6 +210,28 @@ def _kibak_history_context(
         "title": "Historial",
         "items": items,
         "search": search,
+        "filters": {
+            "date_range": request.query_params.get("date_range", "90d"),
+            "date_from": request.query_params.get("date_from", ""),
+            "date_to": request.query_params.get("date_to", ""),
+            "department_id": department_id or "",
+            "kind": kind,
+            "state": state,
+            "source": source,
+        },
+        "departments": all_departments,
+        "categories": db.scalars(
+            select(RoutingDecision.category)
+            .where(RoutingDecision.company_id == user.company_id)
+            .distinct()
+            .order_by(RoutingDecision.category)
+        ).all(),
+        "sources": db.scalars(
+            select(RoutingDecision.source)
+            .where(RoutingDecision.company_id == user.company_id)
+            .distinct()
+            .order_by(RoutingDecision.source)
+        ).all(),
         "summary": {
             "communications": total,
             "corrections": correction_count,
@@ -163,6 +242,13 @@ def _kibak_history_context(
             "page_size": page_size,
             "total_items": total,
             "total_pages": (total + page_size - 1) // page_size if total else 0,
+            "has_next": page < ((total + page_size - 1) // page_size if total else 0),
+            "has_previous": page > 1,
+            "start_item": (page - 1) * page_size + 1 if total else 0,
+            "end_item": min(page * page_size, total),
+            "allowed_page_sizes": (25, 50, 100),
+            "previous_url": _history_pagination_url(request, page - 1, page_size) if page > 1 else "",
+            "next_url": _history_pagination_url(request, page + 1, page_size) if page < ((total + page_size - 1) // page_size if total else 0) else "",
         },
     }
 HISTORY_EMAIL_CURRENT_STATUSES = (
@@ -666,6 +752,8 @@ def history_page(
     date_to: str = "",
     kind: str = "all",
     state: str = "all",
+    department_id: int | None = None,
+    source: str = "all",
     customer_id: str = "",
     search: str = "",
     page: int = 1,
@@ -689,6 +777,10 @@ def history_page(
                 page_size=page_size,
                 start=start,
                 end=end,
+                department_id=department_id,
+                kind=kind,
+                state=state,
+                source=source,
             ),
         )
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)

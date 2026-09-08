@@ -209,6 +209,11 @@ def _kibak_settings_context(request: Request, db: Session, user: TenantUser) -> 
         "llm_provider": provider,
         "llm_model": model,
         "llm_configured": bool(llm and llm.api_key_encrypted and provider != "disabled"),
+        "automation": {
+            "agent_enabled": bool(llm and llm.agent_enabled),
+            "auto_routing_enabled": bool(llm and llm.auto_routing_enabled),
+            "auto_forwarding_enabled": bool(llm and llm.auto_forwarding_enabled),
+        },
         "counts": {
             "mailboxes": mailbox_count,
             "departments": department_count,

@@ -109,7 +109,7 @@ class KibakDashboardRenderTests(unittest.TestCase):
         nav_html = response.text.split('<nav class="nav">', 1)[1].split("</nav>", 1)[0]
         self.assertEqual(
             nav_html.count('class="nav-label"'),
-            6,
+            7,
         )
         for legacy_label in ("Pedidos", "Productos", "Clientes", "WhatsApp", "Importaciones"):
             self.assertNotIn(f'class="nav-label">{legacy_label}</span>', nav_html)
