@@ -37,6 +37,13 @@ OPENAI_MODEL_PRESETS: list[dict[str, str]] = [
 OPENAI_MODEL_PRESET_VALUES = {preset["value"] for preset in OPENAI_MODEL_PRESETS}
 
 
+def completion_token_parameter(model: str | None) -> str:
+    """Return the Chat Completions output-limit parameter supported by a model family."""
+
+    normalized = (model or "").strip().lower()
+    return "max_completion_tokens" if normalized.startswith("gpt-5") else "max_tokens"
+
+
 def is_openai_model_preset(model: str | None) -> bool:
     return bool((model or "").strip()) and (model or "").strip() in OPENAI_MODEL_PRESET_VALUES
 

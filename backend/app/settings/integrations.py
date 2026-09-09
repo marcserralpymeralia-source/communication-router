@@ -20,6 +20,7 @@ from pathlib import Path
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.agent.model_catalog import completion_token_parameter
 from app.agent.prompt_runtime import run_prompt_execution
 from app.communications.service import add_communication_attachment, create_or_update_communication_from_email, mark_communication_processed
 from app.routing.auto import enqueue_automatic_routing
@@ -1677,8 +1678,8 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
         "model": model,
         "messages": messages,
         "temperature": settings.temperature,
-        "max_tokens": settings.max_tokens,
     }
+    payload[completion_token_parameter(model)] = settings.max_tokens
     try:
         request = urllib.request.Request(
             f"{base_url}/chat/completions",

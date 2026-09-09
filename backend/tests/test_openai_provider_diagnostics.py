@@ -40,18 +40,18 @@ class OpenAIProviderDiagnosticsTests(unittest.TestCase):
             api_key_encrypted="ciphertext",
             classification_model="gpt-5.6-luna",
             temperature=0.1,
-            max_tokens=1200,
+            max_tokens=4000,
             timeout_seconds=7,
             retries=0,
         )
 
-    def _call(self, opener):
+    def _call(self, opener, model="gpt-5.6-luna"):
         with patch("app.settings.integrations.decrypt_secret", return_value="fake-test-key"):
             with patch("app.settings.integrations.urllib.request.urlopen", side_effect=opener) as urlopen:
                 return call_openai(
                     self.settings,
                     [{"role": "user", "content": "texto ficticio"}],
-                    "gpt-5.6-luna",
+                    model,
                 ), urlopen
 
     def _http_error(self, status, *, code="provider_code", param="model"):
@@ -79,13 +79,29 @@ class OpenAIProviderDiagnosticsTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(request.full_url, "https://api.openai.com/v1/chat/completions")
         self.assertNotIn("fake-test-key", request.full_url)
+        self.assertNotIn("fake-test-key", request.data.decode())
+        self.assertNotIn("authorization", request.data.decode().lower())
+        self.assertNotIn("api_key", payload)
         self.assertEqual(payload["model"], "gpt-5.6-luna")
         self.assertEqual(payload["messages"], [{"role": "user", "content": "texto ficticio"}])
         self.assertEqual(payload["temperature"], 0.1)
-        self.assertEqual(payload["max_tokens"], 1200)
+        self.assertEqual(payload["max_completion_tokens"], 4000)
+        self.assertNotIn("max_tokens", payload)
         self.assertNotIn("max_output_tokens", payload)
         self.assertNotIn("response_format", payload)
         self.assertTrue(result["ok"])
+
+    def test_legacy_chat_model_keeps_max_tokens_compatibility(self):
+        opener = lambda _request, timeout: _Response(
+            json.dumps({"choices": [{"message": {"content": "{}"}}]})
+        )
+        result, urlopen = self._call(opener, model="gpt-4.1")
+
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data)
+        self.assertTrue(result["ok"])
+        self.assertEqual(payload["max_tokens"], 4000)
+        self.assertNotIn("max_completion_tokens", payload)
 
     def test_http_statuses_are_classified_without_provider_body(self):
         expected = {
@@ -104,6 +120,21 @@ class OpenAIProviderDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(result["diagnostics"]["request_id"], "req-test-123")
                 self.assertEqual(result["diagnostics"]["provider_code"], "provider_code")
                 self.assertNotIn("secret body", json.dumps(result))
+
+    def test_unsupported_parameter_is_invalid_request(self):
+        error = self._http_error(400, code="unsupported_parameter", param="max_tokens")
+        result, http = self._call(lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+        self.assertEqual(http.call_count, 1)
+        self.assertEqual(result["error_type"], "invalid_request")
+        for key, value in {
+            "status_code": 400,
+            "provider_code": "unsupported_parameter",
+            "provider_param": "max_tokens",
+            "phase": "http_response",
+            "exception_class": "HTTPError",
+        }.items():
+            self.assertEqual(result["diagnostics"][key], value)
+        self.assertNotIn("secret body", json.dumps(result))
 
     def test_timeout_and_response_parsing_errors_are_classified(self):
         timeout_result, _ = self._call(lambda _request, **_kwargs: (_ for _ in ()).throw(socket.timeout("secret timeout")))
@@ -163,6 +194,13 @@ class FailedPromptExecutionAuditTests(unittest.TestCase):
             self.assertEqual(raised.exception.details["provider_code"], "invalid_api_key")
             self.assertNotIn("sk-live-secret", execution.validation_errors_json)
             self.assertNotIn("sk-live-secret", execution.response_excerpt or "")
+            execution_id = execution.id
+            db.commit()
+
+        with self.session_factory() as db:
+            execution = db.get(PromptExecution, execution_id)
+            self.assertEqual(execution.output_status, "authentication_error")
+            self.assertNotIn("sk-live-secret", execution.validation_errors_json)
 
 
 if __name__ == "__main__":
