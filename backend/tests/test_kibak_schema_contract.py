@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, inspect, select
@@ -21,6 +22,7 @@ from app.migrations.kibak_baseline import (
 from app.migrations.registry import KIBAK_TENANT_SCHEMA_MIGRATIONS, CURRENT_KIBAK_TENANT_SCHEMA_VERSION
 from app.migrations.runner import run_migration_plan
 from app.tenancy.database import _validate_kibak_baseline
+from app.tenancy.migrations import tenant_migration_report
 
 
 class KibakSchemaContractTests(unittest.TestCase):
@@ -105,6 +107,29 @@ class KibakSchemaContractTests(unittest.TestCase):
             self.assertTrue(result["is_current"])
             self.assertIn("worker_heartbeats", inspect(engine).get_table_names())
             self.assertNotIn("orders", inspect(engine).get_table_names())
+
+    def test_tenant_migration_report_uses_schema_validation_for_kibak_postgres(self):
+        bind = SimpleNamespace(url=SimpleNamespace(drivername="postgresql"))
+        db = SimpleNamespace(get_bind=lambda: bind)
+        report = {"is_current": False, "missing_tables": ["worker_heartbeats"]}
+        with patch("app.tenancy.migrations.table_exists", return_value=True), patch(
+            "app.tenancy.migrations.existing_columns",
+            return_value={
+                "version",
+                "name",
+                "checksum",
+                "execution_ms",
+                "application_version",
+                "status",
+                "applied_at",
+                "last_checked_at",
+                "last_error",
+                "notes",
+            },
+        ), patch("app.tenancy.database._validate_kibak_baseline", return_value=report) as validator:
+            result = tenant_migration_report(db, 7)
+        self.assertEqual(result, report)
+        validator.assert_called_once_with(bind, 7)
 
 
 if __name__ == "__main__":

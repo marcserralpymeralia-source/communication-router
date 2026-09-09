@@ -211,6 +211,10 @@ def tenant_migration_report(db: Session, company_id: int | None, *, persist: boo
             "notes": None,
             "is_current": False,
         }
+    if get_settings().app_slug.strip().lower() == "kibak" and not db.get_bind().url.drivername.startswith("sqlite"):
+        from app.tenancy.database import _validate_kibak_baseline
+
+        return _validate_kibak_baseline(db.get_bind(), company_id)
     state = _latest_state(db, company_id)
     now = _now()
     if not state:
