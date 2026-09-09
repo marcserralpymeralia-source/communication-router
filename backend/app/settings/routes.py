@@ -1,12 +1,13 @@
 import logging
 from datetime import datetime, timezone
 from datetime import date
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from time import perf_counter
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.templating import templates
@@ -27,6 +28,18 @@ from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_c
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.application import run_connection_test, update_settings_section_async
+from app.settings.kibak_ai import (
+    KIBAK_AI_ADMIN_ROLES,
+    KibakAIConfigError,
+    credential_configured,
+    delete_credential,
+    ensure_csrf_token,
+    get_llm_settings,
+    get_routing_prompt_info,
+    save_configuration,
+    validate_activation,
+    validate_csrf_token,
+)
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job, execute_job_inline, job_payload
@@ -42,6 +55,177 @@ from app.routing.policy import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+def _require_kibak_ai() -> None:
+    if get_settings().app_slug.strip().lower() != "kibak":
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+
+def _require_kibak_ai_admin(user: TenantUser) -> None:
+    if user.role.name not in KIBAK_AI_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Solo un Administrador puede modificar la configuración de IA.")
+
+
+def _kibak_ai_redirect(*, message: str = "", error: str = "", status_code: int = 303) -> RedirectResponse:
+    query = urlencode({key: value for key, value in {"message": message, "error": error}.items() if value})
+    return RedirectResponse(f"/settings/ai{('?' + query) if query else ''}", status_code=status_code)
+
+
+def _kibak_ai_error(request: Request, message: str, *, status_code: int = 400):
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse({"ok": False, "message": message}, status_code=status_code)
+    return _kibak_ai_redirect(error=message)
+
+
+def _kibak_ai_context(request: Request, db: Session, user: TenantUser) -> dict:
+    settings = get_llm_settings(db, user.company_id)
+    prompt = get_routing_prompt_info(db, user.company_id)
+    policy = load_routing_policy(db, user.company_id)
+    return {
+        "request": request,
+        "user": user,
+        "title": "Inteligencia Artificial",
+        "llm": settings,
+        "provider": settings.provider if settings else "openai",
+        "model": settings.classification_model if settings else "gpt-5.6-luna",
+        "base_url": settings.base_url if settings else "",
+        "temperature": settings.temperature if settings else 0.1,
+        "max_tokens": settings.max_tokens if settings else 1200,
+        "timeout_seconds": settings.timeout_seconds if settings else 60,
+        "retries": settings.retries if settings else 2,
+        "prompt": prompt,
+        "credential_configured": credential_configured(settings),
+        "can_manage": user.role.name in KIBAK_AI_ADMIN_ROLES,
+        "csrf_token": ensure_csrf_token(request),
+        "policy": policy.as_dict(),
+        "message": request.query_params.get("message", ""),
+        "error": request.query_params.get("error", ""),
+        "provider_options": [
+            {"value": "openai", "label": "OpenAI"},
+            {"value": "openai_compatible", "label": "Compatible OpenAI"},
+            {"value": "azure_openai", "label": "Azure OpenAI"},
+        ],
+    }
+
+
+@router.get("/ai")
+def kibak_ai_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    _require_kibak_ai()
+    return templates.TemplateResponse("settings/kibak_ai.html", _kibak_ai_context(request, db, user))
+
+
+@router.post("/ai/save")
+def save_kibak_ai_configuration(
+    request: Request,
+    csrf_token: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    base_url: str = Form(""),
+    temperature: str = Form("0.1"),
+    max_tokens: str = Form("1200"),
+    timeout_seconds: str = Form("60"),
+    retries: str = Form("2"),
+    api_key: str = Form(""),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    _require_kibak_ai()
+    _require_kibak_ai_admin(user)
+    try:
+        validate_csrf_token(request, csrf_token)
+        save_configuration(
+            db,
+            user.company_id,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            retries=retries,
+            api_key=api_key,
+        )
+        db.commit()
+    except KibakAIConfigError as exc:
+        db.rollback()
+        return _kibak_ai_error(request, str(exc))
+    except SQLAlchemyError:
+        db.rollback()
+        return _kibak_ai_error(request, "No se ha podido guardar la configuración de IA.", status_code=503)
+    finally:
+        api_key = ""
+    log_action(db, company_id=user.company_id, user=user, action="kibak.ai.configuration_saved", entity_type="llm_settings", message="Configuración IA actualizada sin probar el proveedor.")
+    return _kibak_ai_redirect(message="Configuración IA guardada. La credencial no activa el agente.")
+
+
+@router.post("/ai/credential/delete")
+def delete_kibak_ai_credential(
+    request: Request,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    _require_kibak_ai()
+    _require_kibak_ai_admin(user)
+    try:
+        validate_csrf_token(request, csrf_token)
+        delete_credential(db, user.company_id)
+        db.commit()
+    except KibakAIConfigError as exc:
+        db.rollback()
+        return _kibak_ai_error(request, str(exc))
+    except SQLAlchemyError:
+        db.rollback()
+        return _kibak_ai_error(request, "No se ha podido eliminar la credencial.", status_code=503)
+    log_action(db, company_id=user.company_id, user=user, action="kibak.ai.credential_deleted", entity_type="llm_settings", message="Credencial IA eliminada y agente pausado.")
+    return _kibak_ai_redirect(message="Credencial eliminada. El agente permanece desactivado.")
+
+
+@router.post("/ai/activate")
+def activate_kibak_ai(
+    request: Request,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    _require_kibak_ai()
+    _require_kibak_ai_admin(user)
+    try:
+        validate_csrf_token(request, csrf_token)
+        settings = validate_activation(db, user.company_id)
+        settings.agent_enabled = True
+        db.commit()
+    except KibakAIConfigError as exc:
+        db.rollback()
+        return _kibak_ai_error(request, str(exc), status_code=409)
+    except SQLAlchemyError:
+        db.rollback()
+        return _kibak_ai_error(request, "No se ha podido activar el agente IA.", status_code=503)
+    log_action(db, company_id=user.company_id, user=user, action="kibak.ai.agent_activated", entity_type="llm_settings", message="Agente IA activado tras validar su configuración.")
+    return _kibak_ai_redirect(message="Agente IA activado.")
+
+
+@router.post("/ai/pause")
+def pause_kibak_ai(
+    request: Request,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    _require_kibak_ai()
+    _require_kibak_ai_admin(user)
+    try:
+        validate_csrf_token(request, csrf_token)
+        settings = get_llm_settings(db, user.company_id)
+        if settings:
+            settings.agent_enabled = False
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        return _kibak_ai_error(request, "No se ha podido pausar el agente IA.", status_code=503)
+    log_action(db, company_id=user.company_id, user=user, action="kibak.ai.agent_paused", entity_type="llm_settings", message="Agente IA pausado.")
+    return _kibak_ai_redirect(message="Agente IA pausado.")
 
 
 @router.get("/diagnostics/prompts")
@@ -215,7 +399,7 @@ def _kibak_settings_context(request: Request, db: Session, user: TenantUser) -> 
         "llm": llm,
         "llm_provider": provider,
         "llm_model": model,
-        "llm_configured": bool(llm and llm.api_key_encrypted and provider != "disabled"),
+        "llm_configured": credential_configured(llm) and provider != "disabled",
         "automation": {
             "agent_enabled": bool(llm and llm.agent_enabled),
             **policy.as_dict(),

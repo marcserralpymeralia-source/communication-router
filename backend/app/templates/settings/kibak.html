@@ -20,6 +20,7 @@
       <div class="module-card-head"><div><h3>Inteligencia artificial</h3><span class="module-state {% if llm_configured %}ready{% else %}pending{% endif %}">{{ 'Configurada' if llm_configured else 'Pendiente' }}</span></div></div>
       <p>{{ llm_provider|capitalize }} · {{ llm_model }}</p>
       <small class="muted">La clave de proveedor nunca se muestra.</small>
+      <a class="button secondary compact-button" href="/settings/ai">Configurar IA</a>
     </article>
     <article class="module-card panel">
       <div class="module-card-head"><div><h3>Buzones</h3><span class="module-state ready">{{ counts.mailboxes }}</span></div></div>

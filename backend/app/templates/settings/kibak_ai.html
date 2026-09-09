@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% set title = "Inteligencia Artificial" %}
+{% block content %}
+<section class="page-section">
+  <header class="page-section-header">
+    <div>
+      <span class="kibak-eyebrow">KIBAK</span>
+      <h2>Inteligencia Artificial</h2>
+      <p>Configuración tenant-scoped para el análisis semántico de comunicaciones.</p>
+    </div>
+    <a class="button secondary" href="/settings">Volver a configuración</a>
+  </header>
+
+  {% if message %}<div class="notice success" role="status">{{ message }}</div>{% endif %}
+  {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+
+  <div class="settings-modules">
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Estado del agente</h3><span class="module-state {% if llm and llm.agent_enabled %}ready{% else %}pending{% endif %}">{{ "Activo" if llm and llm.agent_enabled else "Desactivado" }}</span></div></div>
+      <div class="settings-kpis">
+        <div><span>Proveedor</span><strong>{{ provider }}</strong></div>
+        <div><span>Modelo</span><strong>{{ model }}</strong></div>
+        <div><span>Credencial</span><strong>{{ "Configurada" if credential_configured else "Pendiente" }}</strong></div>
+      </div>
+      <div class="drawer-actions">
+        {% if can_manage and not (llm and llm.agent_enabled) %}
+          <form method="post" action="/settings/ai/activate"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="primary" type="submit">Activar IA</button></form>
+        {% endif %}
+        {% if can_manage and llm and llm.agent_enabled %}
+          <form method="post" action="/settings/ai/pause"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary" type="submit">Pausar IA</button></form>
+        {% endif %}
+      </div>
+    </article>
+
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Prompt de routing</h3><span class="module-state {% if prompt.available %}ready{% else %}pending{% endif %}">{{ "Disponible" if prompt.available else "Pendiente" }}</span></div></div>
+      <p>{{ prompt.purpose }} · versión {{ prompt.version if prompt.version is not none else "no disponible" }}</p>
+      <p class="muted">{{ prompt.name }}</p>
+    </article>
+
+    <article class="module-card panel">
+      <div class="module-card-head"><div><h3>Política operativa</h3><span class="module-state ready">Controlada</span></div></div>
+      <p>Auto-routing: {{ "Activo" if policy.auto_routing_enabled else "Inactivo" }} · Simulación: {{ "Activa" if policy.simulation_mode else "Inactiva" }}</p>
+      <p>Auto-forwarding: {{ "Activo" if policy.auto_forwarding_enabled else "Inactivo" }}</p>
+      <p class="muted">Revisión {{ "%.0f"|format(policy.review_threshold * 100) }}% · automatización {{ "%.0f"|format(policy.auto_threshold * 100) }}%</p>
+    </article>
+  </div>
+
+  {% if can_manage %}
+    <form class="stack" method="post" action="/settings/ai/save" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <section class="panel drawer-card">
+        <div class="section-title-row"><div><h3>Configuración del proveedor</h3><p class="muted">Guardar una credencial no prueba el proveedor ni activa el agente.</p></div></div>
+        <div class="form-grid">
+          <label>Proveedor<select name="provider">{% for option in provider_options %}<option value="{{ option.value }}" {% if provider == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+          <label>Modelo<input name="model" value="{{ model }}" maxlength="100" required></label>
+          <label class="span-2">Base URL opcional<input name="base_url" value="{{ base_url }}" placeholder="https://api.openai.com/v1" autocomplete="off"></label>
+          <label class="span-2">API key<input name="api_key" type="password" placeholder="{{ "••••••••" if credential_configured else "No configurada" }}" autocomplete="new-password"></label>
+        </div>
+      </section>
+
+      <section class="panel drawer-card">
+        <div class="section-title-row"><div><h3>Parámetros de routing</h3><p class="muted">Se aplican al runtime tenant-scoped.</p></div></div>
+        <div class="form-grid grid-4-cols">
+          <label>Temperatura<input name="temperature" type="number" min="0" max="2" step="0.1" value="{{ temperature }}" required></label>
+          <label>Máximo de tokens<input name="max_tokens" type="number" min="1" max="32000" value="{{ max_tokens }}" required></label>
+          <label>Timeout (segundos)<input name="timeout_seconds" type="number" min="1" max="600" value="{{ timeout_seconds }}" required></label>
+          <label>Reintentos<input name="retries" type="number" min="0" max="5" value="{{ retries }}" required></label>
+        </div>
+        <div class="drawer-actions"><button class="primary" type="submit">Guardar configuración</button></div>
+      </section>
+    </form>
+
+    <section class="panel drawer-card">
+      <div class="section-title-row"><div><h3>Credencial</h3><p class="muted">La clave se cifra antes de guardarse y nunca se muestra.</p></div></div>
+      {% if credential_configured %}
+        <p>Credencial configurada. Puedes reemplazarla desde el formulario superior.</p>
+        <form method="post" action="/settings/ai/credential/delete" onsubmit="return confirm('¿Eliminar la credencial y pausar el agente?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="secondary" type="submit">Eliminar credencial</button>
+        </form>
+      {% else %}
+        <p>La credencial todavía no está configurada.</p>
+      {% endif %}
+    </section>
+  {% else %}
+    <section class="panel drawer-card"><p>Tu rol puede consultar el estado de IA, pero no modificar credenciales ni activación.</p></section>
+  {% endif %}
+</section>
+{% endblock %}
