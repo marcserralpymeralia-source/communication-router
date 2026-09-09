@@ -89,10 +89,18 @@ class RoutingRuntime(Protocol):
 class RoutingValidationError(ValueError):
     """Raised when an LLM response cannot be safely used for routing."""
 
-    def __init__(self, message: str, *, retryable: bool = False, error_type: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        error_type: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.error_type = error_type
+        self.details = details or {}
 
 
 ContextBuilder = Callable[[int, Session], dict[str, Any]]

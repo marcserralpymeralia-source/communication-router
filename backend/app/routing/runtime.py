@@ -16,11 +16,17 @@ from app.db.models import LLMSettings
 RoutingProvider = Callable[[Any, list[dict], str], dict]
 
 
-def _routing_error(message: str, *, retryable: bool = False, error_type: str | None = None):
+def _routing_error(
+    message: str,
+    *,
+    retryable: bool = False,
+    error_type: str | None = None,
+    details: dict[str, Any] | None = None,
+):
     # Import lazily so the service can expose the runtime without a module cycle.
     from app.routing.service import RoutingValidationError
 
-    return RoutingValidationError(message, retryable=retryable, error_type=error_type)
+    return RoutingValidationError(message, retryable=retryable, error_type=error_type, details=details)
 
 
 class RoutingLLMRuntime:
@@ -98,12 +104,14 @@ class RoutingLLMRuntime:
                 result.get("message") or "No se pudo analizar la comunicación.",
                 retryable=error_type in {"timeout", "provider_error", "temporarily_unavailable", "rate_limit"},
                 error_type=error_type,
+                details=result.get("provider_diagnostics"),
             )
         if not result.get("validation_ok"):
             errors = "; ".join(result.get("validation_errors") or [])
             raise _routing_error(
                 f"Respuesta de routing no valida: {errors or 'esquema no valido'}.",
                 error_type=str(result.get("validation_status") or "schema_error"),
+                details=result.get("provider_diagnostics"),
             )
         self.last_result = result
         return result

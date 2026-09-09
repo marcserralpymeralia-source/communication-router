@@ -1679,33 +1679,106 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
         "temperature": settings.temperature,
         "max_tokens": settings.max_tokens,
     }
-    request = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    last_error = ""
+    try:
+        request = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error_type": "invalid_configuration",
+            "message": "La URL o configuración del proveedor IA no es válida.",
+            "diagnostics": {"exception_class": exc.__class__.__name__, "phase": "request_build"},
+        }
+    last_diagnostics: dict[str, object] = {}
     for _ in range(max(int(settings.retries or 0), 0) + 1):
         try:
             with urllib.request.urlopen(request, timeout=settings.timeout_seconds) as response:
                 data = json.loads(response.read().decode())
+            content = data["choices"][0]["message"]["content"]
             return {
                 "ok": True,
                 "message": "Conexion OpenAI correcta.",
-                "content": data["choices"][0]["message"]["content"],
+                "content": content,
                 "usage": data.get("usage") or {},
             }
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="ignore")
-            if exc.code in {401, 403}:
-                return {"ok": False, "error_type": "authentication_failed", "message": "API key invalida o sin permisos para el proveedor IA."}
-            if exc.code == 404:
-                return {"ok": False, "error_type": "invalid_configuration", "message": f"Modelo o endpoint no encontrado: {model}."}
-            last_error = f"Error OpenAI HTTP {exc.code}: {detail[:300]}"
+            provider_code = None
+            provider_param = None
+            try:
+                error_payload = json.loads(detail).get("error") or {}
+                if isinstance(error_payload, dict):
+                    provider_code = error_payload.get("code")
+                    provider_param = error_payload.get("param")
+            except (TypeError, ValueError):
+                pass
+            request_id = None
+            if exc.headers:
+                request_id = exc.headers.get("x-request-id") or exc.headers.get("request-id")
+            if exc.code == 400:
+                category = "invalid_request"
+            elif exc.code == 401:
+                category = "authentication_error"
+            elif exc.code == 403:
+                category = "permission_error"
+            elif exc.code == 404:
+                category = "model_not_available"
+            elif exc.code == 408:
+                category = "timeout"
+            elif exc.code == 429:
+                category = "rate_limit"
+            elif exc.code >= 500:
+                category = "provider_error"
+            else:
+                category = "provider_error"
+            last_diagnostics = {
+                "category": category,
+                "exception_class": exc.__class__.__name__,
+                "phase": "http_response",
+                "status_code": exc.code,
+                "provider_code": provider_code,
+                "provider_param": provider_param,
+                "request_id": request_id,
+            }
+            if category in {"authentication_error", "permission_error", "invalid_request", "model_not_available"}:
+                return {
+                    "ok": False,
+                    "error_type": category,
+                    "message": "El proveedor IA rechazó la solicitud.",
+                    "diagnostics": last_diagnostics,
+                }
         except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
-            last_error = f"Timeout o error de conexion con OpenAI: {exc}"
-    return {"ok": False, "error_type": classify_integration_error(last_error or "Error desconocido conectando con OpenAI."), "message": last_error or "Error desconocido conectando con OpenAI."}
+            reason = getattr(exc, "reason", None)
+            category = "timeout" if isinstance(exc, (TimeoutError, socket.timeout)) or isinstance(reason, TimeoutError) else "provider_error"
+            last_diagnostics = {
+                "category": category,
+                "exception_class": exc.__class__.__name__,
+                "phase": "transport",
+            }
+        except json.JSONDecodeError as exc:
+            return {
+                "ok": False,
+                "error_type": "invalid_json",
+                "message": "El proveedor IA devolvió una respuesta no JSON.",
+                "diagnostics": {"category": "invalid_json", "exception_class": exc.__class__.__name__, "phase": "response_parse"},
+            }
+        except (KeyError, IndexError, TypeError) as exc:
+            return {
+                "ok": False,
+                "error_type": "provider_error",
+                "message": "El proveedor IA devolvió una respuesta con formato inesperado.",
+                "diagnostics": {"category": "provider_error", "exception_class": exc.__class__.__name__, "phase": "response_parse"},
+            }
+    return {
+        "ok": False,
+        "error_type": str(last_diagnostics.get("category") or "provider_error"),
+        "message": "El proveedor IA no completó la solicitud.",
+        "diagnostics": last_diagnostics or {"category": "provider_error", "phase": "transport"},
+    }
 
 
 def classify_sample(db: Session, settings: LLMSettings, company_id: int, text: str, prompt: str | None = None) -> dict:

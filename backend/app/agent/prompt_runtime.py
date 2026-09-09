@@ -393,6 +393,26 @@ def _safe_provider_message(message: Any) -> str:
     return re.sub(r"(?i)\bsk-[A-Za-z0-9_-]+", "sk-[redacted]", text)
 
 
+def _safe_provider_diagnostics(value: Any) -> dict[str, Any]:
+    """Keep only structured provider metadata; never persist bodies or credentials."""
+
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in ("category", "exception_class", "phase", "provider_code", "provider_param", "request_id"):
+        item = value.get(key)
+        if item is None:
+            continue
+        text = str(item).strip()
+        if not text or len(text) > 160 or not re.fullmatch(r"[A-Za-z0-9_.:/-]+", text):
+            continue
+        result[key] = text
+    status_code = value.get("status_code")
+    if isinstance(status_code, int) and 100 <= status_code <= 599:
+        result["status_code"] = status_code
+    return result
+
+
 def persist_prompt_execution(db: Session, execution: PromptExecution, *, commit: bool = False) -> PromptExecution:
     """Persist one execution without taking ownership of the caller transaction by default."""
 
@@ -407,6 +427,13 @@ def _provider_exception_status(exc: Exception) -> str:
     if isinstance(exc, TimeoutError):
         return "timeout"
     return "provider_error"
+
+
+def _provider_exception_diagnostics(exc: Exception) -> dict[str, str]:
+    return {
+        "exception_class": exc.__class__.__name__,
+        "phase": "provider_call",
+    }
 
 
 def run_prompt_execution(
@@ -449,6 +476,7 @@ def run_prompt_execution(
             "ok": False,
             "error_type": _provider_exception_status(exc),
             "message": _safe_provider_message(exc),
+            "diagnostics": _provider_exception_diagnostics(exc),
         }
     if not isinstance(response, dict):
         response = {
@@ -471,6 +499,7 @@ def run_prompt_execution(
             data=None,
             errors=[safe_message],
         )
+    provider_diagnostics = _safe_provider_diagnostics(response.get("diagnostics"))
     finished_at = datetime.now(timezone.utc)
     response_excerpt = _safe_excerpt(response_content)
     response_hash = sha256(response_content.encode("utf-8")).hexdigest() if response_content else None
@@ -484,7 +513,14 @@ def run_prompt_execution(
         parameters_json=json.dumps(parameters, ensure_ascii=False),
         input_reference=input_reference,
         output_status=validation.status,
-        validation_errors_json=json.dumps(validation.errors, ensure_ascii=False) if validation.errors else None,
+        validation_errors_json=(
+            json.dumps(
+                {"errors": validation.errors, "diagnostics": provider_diagnostics},
+                ensure_ascii=False,
+            )
+            if provider_diagnostics
+            else (json.dumps(validation.errors, ensure_ascii=False) if validation.errors else None)
+        ),
         input_tokens=int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0),
         output_tokens=int(usage.get("completion_tokens") or usage.get("output_tokens") or 0),
         estimated_cost=usage.get("estimated_cost"),
@@ -508,6 +544,7 @@ def run_prompt_execution(
             "validation_status": validation.status,
             "validation_errors": validation.errors,
             "validation_ok": validation.ok,
+            "provider_diagnostics": provider_diagnostics,
             "started_at": started_at,
             "finished_at": finished_at,
             "duration_ms": duration_ms,
