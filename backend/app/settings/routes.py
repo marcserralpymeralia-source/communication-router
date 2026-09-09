@@ -29,6 +29,7 @@ from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, e
 from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.kibak_ai import (
+    DEFAULT_OPENAI_BASE_URL,
     KIBAK_AI_ADMIN_ROLES,
     KibakAIConfigError,
     credential_configured,
@@ -89,7 +90,13 @@ def _kibak_ai_context(request: Request, db: Session, user: TenantUser) -> dict:
         "llm": settings,
         "provider": settings.provider if settings else "openai",
         "model": settings.classification_model if settings else "gpt-5.6-luna",
-        "base_url": settings.base_url if settings else "",
+        "base_url": (
+            settings.base_url
+            if settings and settings.base_url
+            else DEFAULT_OPENAI_BASE_URL
+            if not settings or settings.provider == "openai"
+            else ""
+        ),
         "temperature": settings.temperature if settings else 0.1,
         "max_tokens": settings.max_tokens if settings else 1200,
         "timeout_seconds": settings.timeout_seconds if settings else 60,

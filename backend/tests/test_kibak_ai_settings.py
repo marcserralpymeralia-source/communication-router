@@ -14,7 +14,8 @@ from app.db.database import Base
 from app.db.models import AuditLog, BackgroundJob, Company, LLMSettings, PromptExecution, PromptTemplate, PromptVersion
 from app.master.models import CompanyMembership
 from app.routing.policy import load_routing_policy
-from app.settings.kibak_ai import KibakAIConfigError, credential_configured, save_configuration, validate_api_key
+from app.settings.kibak_ai import DEFAULT_OPENAI_BASE_URL, KibakAIConfigError, credential_configured, save_configuration, validate_api_key, validate_base_url
+from starlette.testclient import TestClient
 from tests.test_setup_onboarding import SetupFixture
 
 
@@ -97,6 +98,7 @@ class KibakAISettingsTests(unittest.TestCase):
             assert settings is not None
             self.assertNotEqual(settings.api_key_encrypted, fake_key)
             self.assertEqual(decrypt_secret(settings.api_key_encrypted), fake_key)
+            self.assertEqual(settings.base_url, DEFAULT_OPENAI_BASE_URL)
             policy = load_routing_policy(db, 1)
             self.assertTrue(policy.auto_routing_enabled)
             self.assertTrue(policy.simulation_mode)
@@ -121,6 +123,59 @@ class KibakAISettingsTests(unittest.TestCase):
             settings = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
             assert settings is not None
             self.assertEqual(decrypt_secret(settings.api_key_encrypted), replacement)
+
+    def test_localhost_origin_does_not_become_provider_url(self):
+        localhost_client = TestClient(self.client.app, base_url="http://localhost:8000", raise_server_exceptions=False)
+        try:
+            login = localhost_client.post(
+                "/login",
+                data={"email": "admin@setup.local", "password": "setup-password"},
+                follow_redirects=False,
+            )
+            self.assertEqual(login.status_code, 303)
+            page = localhost_client.get("/settings/ai")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(f'name="base_url" value="{DEFAULT_OPENAI_BASE_URL}"', page.text)
+            match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+            self.assertIsNotNone(match)
+            response = localhost_client.post(
+                "/settings/ai/save",
+                data={
+                    "csrf_token": match.group(1),
+                    "provider": "openai",
+                    "model": "gpt-5.6-luna",
+                    "base_url": DEFAULT_OPENAI_BASE_URL,
+                    "temperature": "0.1",
+                    "max_tokens": "1200",
+                    "timeout_seconds": "60",
+                    "retries": "2",
+                    "api_key": "sk-kibak-localhost-test",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+        finally:
+            localhost_client.close()
+
+    def test_save_does_not_call_provider_or_enable_agent(self):
+        with self.fixture.TenantSession() as db:
+            settings = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+            assert settings is not None
+            settings.agent_enabled = False
+            settings.auto_routing_enabled = True
+            settings.simulation_mode = True
+            settings.auto_forwarding_enabled = False
+            db.commit()
+        with patch("app.settings.integrations.call_openai") as provider:
+            response = self._save(self._csrf(), api_key="sk-kibak-localhost-test", base_url="")
+        self.assertEqual(response.status_code, 303)
+        provider.assert_not_called()
+        with self.fixture.TenantSession() as db:
+            settings = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+            assert settings is not None
+            self.assertFalse(settings.agent_enabled)
+            self.assertEqual(settings.base_url, DEFAULT_OPENAI_BASE_URL)
+
 
     def test_operator_cannot_change_configuration(self):
         with self.fixture.MasterSession() as db:
@@ -246,6 +301,14 @@ class KibakAICredentialValidationTests(unittest.TestCase):
     def test_invalid_ciphertext_is_not_reported_as_configured(self):
         settings = LLMSettings(company_id=1, api_key_encrypted="not-a-fernet-token")
         self.assertFalse(credential_configured(settings))
+
+    def test_provider_url_contract(self):
+        self.assertEqual(validate_base_url("https://api.openai.com/v1"), DEFAULT_OPENAI_BASE_URL)
+        self.assertEqual(validate_base_url("http://localhost:9000/provider"), "http://localhost:9000/provider")
+        with self.assertRaises(KibakAIConfigError):
+            validate_base_url("https://user:password@example.com")
+        with self.assertRaises(KibakAIConfigError):
+            validate_base_url("file:///tmp/provider")
 
 
 if __name__ == "__main__":

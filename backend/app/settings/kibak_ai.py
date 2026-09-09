@@ -21,6 +21,7 @@ KIBAK_AI_PROVIDERS = {
     "openai_compatible": "Compatible OpenAI",
     "azure_openai": "Azure OpenAI",
 }
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 KIBAK_AI_CSRF_SESSION_KEY = "kibak_ai_csrf"
 
 
@@ -131,6 +132,8 @@ def save_configuration(
     provider = validate_provider(provider)
     model = validate_model(model)
     base_url = validate_base_url(base_url)
+    if base_url is None and provider == "openai":
+        base_url = DEFAULT_OPENAI_BASE_URL
     temperature_value = _number(temperature, field="La temperatura", integer=False, minimum=0, maximum=2)
     max_tokens_value = _number(max_tokens, field="El máximo de tokens", integer=True, minimum=1, maximum=32000)
     timeout_value = _number(timeout_seconds, field="El timeout", integer=True, minimum=1, maximum=600)

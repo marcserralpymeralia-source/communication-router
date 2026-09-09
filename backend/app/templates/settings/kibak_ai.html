@@ -54,7 +54,7 @@
         <div class="form-grid">
           <label>Proveedor<select name="provider">{% for option in provider_options %}<option value="{{ option.value }}" {% if provider == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
           <label>Modelo<input name="model" value="{{ model }}" maxlength="100" required></label>
-          <label class="span-2">Base URL opcional<input name="base_url" value="{{ base_url }}" placeholder="https://api.openai.com/v1" autocomplete="off"></label>
+          <label class="span-2">URL base del proveedor<input name="base_url" value="{{ base_url or '' }}" placeholder="https://api.openai.com/v1" autocomplete="off"></label>
           <label class="span-2">API key<input name="api_key" type="password" placeholder="{{ "••••••••" if credential_configured else "No configurada" }}" autocomplete="new-password"></label>
         </div>
       </section>
