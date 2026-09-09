@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.redirects import login_location_for_request
 from app.core.config import get_settings
+from app.core.database_urls import resolve_tenant_database_url
 from app.master.database import get_master_db
 from app.master.service import load_tenant_context
 from app.db.database import Base
@@ -22,7 +23,8 @@ def _connect_args(database_url: str) -> dict[str, object]:
 
 @lru_cache(maxsize=128)
 def get_tenant_engine(database_url: str):
-    return create_engine(database_url, connect_args=_connect_args(database_url), pool_pre_ping=True)
+    resolved_url = resolve_tenant_database_url(database_url)
+    return create_engine(resolved_url, connect_args=_connect_args(resolved_url), pool_pre_ping=True)
 
 
 def tenant_db_session(database_url: str):
@@ -59,8 +61,8 @@ def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
 
     table_names = set(inspect(engine).get_table_names())
     missing_tables = sorted(KIBAK_TENANT_TABLES - table_names)
-    if missing_tables:
-        raise RuntimeError(f"KIBAK tenant schema incomplete: {', '.join(missing_tables)}")
+    unexpected_tables = sorted(table_names - KIBAK_TENANT_TABLES)
+    schema_matches = not missing_tables and not unexpected_tables
     with engine.connect() as conn:
         row = conn.execute(
             text(
@@ -80,10 +82,12 @@ def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
     expected_checksum = CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM if evolved else KIBAK_TENANT_BASELINE_VERSION
     return {
         **dict(row),
+        "missing_tables": missing_tables,
+        "unexpected_tables": unexpected_tables,
         "current_version": row["version"],
         "current_name": CURRENT_KIBAK_TENANT_SCHEMA_NAME if evolved else "KIBAK tenant baseline",
         "current_checksum": expected_checksum,
-        "is_current": row["status"] == "current" and row["checksum"] in {None, expected_checksum},
+        "is_current": schema_matches and row["status"] == "current" and row["checksum"] in {None, expected_checksum},
     }
 
 

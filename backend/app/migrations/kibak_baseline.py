@@ -34,6 +34,8 @@ KIBAK_MASTER_TABLES = frozenset(
 )
 
 KIBAK_TENANT_TABLES = frozenset(
+    # This is a complete clean KIBAK baseline. The immutable .1 ledger marker
+    # identifies the baseline; later KIBAK migrations evolve older installs.
     {
         "companies",
         "roles",
@@ -57,6 +59,7 @@ KIBAK_TENANT_TABLES = frozenset(
         "llm_settings",
         "background_jobs",
         "job_attempts",
+        "worker_heartbeats",
         "audit_logs",
         "prompt_templates",
         "prompt_versions",

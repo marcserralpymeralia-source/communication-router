@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agent.prompt_runtime import ROUTING_PROMPT_PURPOSE
 from app.core.encryption import decrypt_secret
 from app.db.models import (
     Department,
@@ -127,7 +128,7 @@ def build_kibak_readiness(db: Session, company_id: int) -> dict[str, Any]:
     enabled_mailboxes = [item for item in configured_mailboxes if item.enabled]
     prompt = db.scalar(
         select(PromptTemplate)
-        .where(PromptTemplate.company_id == company_id, PromptTemplate.purpose == "routing")
+        .where(PromptTemplate.company_id == company_id, PromptTemplate.purpose == ROUTING_PROMPT_PURPOSE)
         .limit(1)
     )
     prompt_version = db.scalar(select(PromptVersion).where(PromptVersion.company_id == company_id, PromptVersion.template_id == prompt.id).limit(1)) if prompt else None

@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
+from app.core.database_urls import resolve_tenant_database_url
 from app.master.database import MasterBase
 from app.master.models import MasterCompany, MasterSchemaMigration, MasterTenantDatabase, MasterUser
 from app.db.database import Base
@@ -106,7 +107,8 @@ def file_info(database_url: str) -> FileInfo:
 
 
 def _connect(database_url: str):
-    return create_engine(database_url, connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {})
+    resolved_url = resolve_tenant_database_url(database_url)
+    return create_engine(resolved_url, connect_args={"check_same_thread": False} if resolved_url.startswith("sqlite") else {})
 
 
 def _current_tables(kind: str) -> set[str]:

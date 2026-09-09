@@ -105,6 +105,8 @@ class Settings(BaseSettings):
     master_database_url: str = "sqlite:///./kibak_master.db"
     tenant_db_mode: str = Field(default="sqlite", validation_alias=AliasChoices("TENANT_DB_MODE"))
     tenant_database_url: str | None = Field(default=None, validation_alias=AliasChoices("TENANT_DATABASE_URL"))
+    tenant_runtime_database_host: str | None = Field(default=None, validation_alias=AliasChoices("TENANT_DATABASE_RUNTIME_HOST"))
+    tenant_runtime_database_port: int | None = Field(default=None, validation_alias=AliasChoices("TENANT_DATABASE_RUNTIME_PORT"))
     app_secret_key: str = Field(default=DEV_SECRET_KEY, validation_alias=AliasChoices("SECRET_KEY", "APP_SECRET_KEY"))
     tenant_db_encryption_key: str | None = Field(
         default=None,
@@ -185,6 +187,10 @@ class Settings(BaseSettings):
             self.tenant_database_url = self.tenant_database_url.strip() or None
         if self.tenant_database_url:
             self.database_url = self.tenant_database_url
+        if self.tenant_runtime_database_host is not None:
+            self.tenant_runtime_database_host = self.tenant_runtime_database_host.strip() or None
+        if self.tenant_runtime_database_port is not None and not 1 <= self.tenant_runtime_database_port <= 65535:
+            raise ValueError("TENANT_DATABASE_RUNTIME_PORT must be between 1 and 65535")
         running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
         demo_runtime = self.environment == "demo" or running_on_vercel
 

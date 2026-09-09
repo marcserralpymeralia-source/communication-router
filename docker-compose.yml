@@ -10,6 +10,8 @@ services:
       DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
       TENANT_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
       MASTER_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_master
+      TENANT_DATABASE_RUNTIME_HOST: postgres
+      TENANT_DATABASE_RUNTIME_PORT: 5432
     depends_on:
       postgres:
         condition: service_healthy
@@ -29,6 +31,8 @@ services:
       DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
       TENANT_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_tenant_test
       MASTER_DATABASE_URL: postgresql+psycopg://kibak_local:kibak_local_dev_password@postgres:5432/kibak_master
+      TENANT_DATABASE_RUNTIME_HOST: postgres
+      TENANT_DATABASE_RUNTIME_PORT: 5432
     depends_on:
       postgres:
         condition: service_healthy
