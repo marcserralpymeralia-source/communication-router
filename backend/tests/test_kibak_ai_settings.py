@@ -77,6 +77,12 @@ class KibakAISettingsTests(unittest.TestCase):
         self.assertIn("No configurada", response.text)
         self.assertNotIn("api_key_encrypted", response.text)
 
+    def test_luna_shows_temperature_as_model_managed(self):
+        response = self.client.get("/settings/ai")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("no admite temperatura personalizada", response.text)
+        self.assertIn('aria-disabled="true"', response.text)
+
     def test_save_replace_empty_preserve_and_privacy(self):
         fake_key = "sk-kibak-test-secret-do-not-log"
         replacement = "sk-kibak-replacement-secret"

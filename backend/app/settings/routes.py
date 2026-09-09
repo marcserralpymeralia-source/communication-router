@@ -14,7 +14,7 @@ from app.core.templating import templates
 from app.core.config import get_settings
 from app.core.middleware import invalidate_branding_cache
 from app.auth.dependencies import current_user
-from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, openai_model_description, openai_model_label, openai_model_option_payload, OPENAI_MODEL_PRESET_VALUES, resolve_openai_runtime_model
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, openai_model_description, openai_model_label, openai_model_option_payload, OPENAI_MODEL_PRESET_VALUES, resolve_openai_runtime_model, supports_custom_temperature
 from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
@@ -83,6 +83,7 @@ def _kibak_ai_context(request: Request, db: Session, user: TenantUser) -> dict:
     settings = get_llm_settings(db, user.company_id)
     prompt = get_routing_prompt_info(db, user.company_id)
     policy = load_routing_policy(db, user.company_id)
+    model = settings.classification_model if settings else "gpt-5.6-luna"
     return {
         "request": request,
         "user": user,
@@ -98,6 +99,7 @@ def _kibak_ai_context(request: Request, db: Session, user: TenantUser) -> dict:
             else ""
         ),
         "temperature": settings.temperature if settings else 0.1,
+        "temperature_supported": supports_custom_temperature(model),
         "max_tokens": settings.max_tokens if settings else 1200,
         "timeout_seconds": settings.timeout_seconds if settings else 60,
         "retries": settings.retries if settings else 2,

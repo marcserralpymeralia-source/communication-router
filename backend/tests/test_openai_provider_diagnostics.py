@@ -84,11 +84,12 @@ class OpenAIProviderDiagnosticsTests(unittest.TestCase):
         self.assertNotIn("api_key", payload)
         self.assertEqual(payload["model"], "gpt-5.6-luna")
         self.assertEqual(payload["messages"], [{"role": "user", "content": "texto ficticio"}])
-        self.assertEqual(payload["temperature"], 0.1)
+        self.assertNotIn("temperature", payload)
         self.assertEqual(payload["max_completion_tokens"], 4000)
         self.assertNotIn("max_tokens", payload)
         self.assertNotIn("max_output_tokens", payload)
-        self.assertNotIn("response_format", payload)
+        for optional_parameter in ("top_p", "presence_penalty", "frequency_penalty", "stop", "seed", "logprobs", "response_format"):
+            self.assertNotIn(optional_parameter, payload)
         self.assertTrue(result["ok"])
 
     def test_legacy_chat_model_keeps_max_tokens_compatibility(self):
@@ -101,6 +102,7 @@ class OpenAIProviderDiagnosticsTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertTrue(result["ok"])
         self.assertEqual(payload["max_tokens"], 4000)
+        self.assertEqual(payload["temperature"], 0.1)
         self.assertNotIn("max_completion_tokens", payload)
 
     def test_http_statuses_are_classified_without_provider_body(self):

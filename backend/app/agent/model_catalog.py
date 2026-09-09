@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -37,11 +38,31 @@ OPENAI_MODEL_PRESETS: list[dict[str, str]] = [
 OPENAI_MODEL_PRESET_VALUES = {preset["value"] for preset in OPENAI_MODEL_PRESETS}
 
 
+@dataclass(frozen=True, slots=True)
+class OpenAIModelCapabilities:
+    """Provider parameters supported by an OpenAI Chat Completions model family."""
+
+    completion_token_parameter: str
+    supports_custom_temperature: bool
+
+
+def openai_model_capabilities(model: str | None) -> OpenAIModelCapabilities:
+    normalized = (model or "").strip().lower()
+    modern_completion = normalized.startswith("gpt-5")
+    return OpenAIModelCapabilities(
+        completion_token_parameter="max_completion_tokens" if modern_completion else "max_tokens",
+        supports_custom_temperature=not modern_completion,
+    )
+
+
 def completion_token_parameter(model: str | None) -> str:
     """Return the Chat Completions output-limit parameter supported by a model family."""
 
-    normalized = (model or "").strip().lower()
-    return "max_completion_tokens" if normalized.startswith("gpt-5") else "max_tokens"
+    return openai_model_capabilities(model).completion_token_parameter
+
+
+def supports_custom_temperature(model: str | None) -> bool:
+    return openai_model_capabilities(model).supports_custom_temperature
 
 
 def is_openai_model_preset(model: str | None) -> bool:

@@ -62,7 +62,10 @@
       <section class="panel drawer-card">
         <div class="section-title-row"><div><h3>Parámetros de routing</h3><p class="muted">Se aplican al runtime tenant-scoped.</p></div></div>
         <div class="form-grid grid-4-cols">
-          <label>Temperatura<input name="temperature" type="number" min="0" max="2" step="0.1" value="{{ temperature }}" required></label>
+          <label>Temperatura
+            <input id="temperature" name="temperature" type="number" min="0" max="2" step="0.1" value="{{ temperature }}" required {% if not temperature_supported %}readonly aria-disabled="true"{% endif %}>
+            <small id="temperature-help" class="muted">{% if temperature_supported %}Configurada: {{ temperature }}{% else %}El modelo seleccionado no admite temperatura personalizada; el adaptador la omite.{% endif %}</small>
+          </label>
           <label>Máximo de tokens<input name="max_tokens" type="number" min="1" max="32000" value="{{ max_tokens }}" required></label>
           <label>Timeout (segundos)<input name="timeout_seconds" type="number" min="1" max="600" value="{{ timeout_seconds }}" required></label>
           <label>Reintentos<input name="retries" type="number" min="0" max="5" value="{{ retries }}" required></label>
@@ -87,4 +90,22 @@
     <section class="panel drawer-card"><p>Tu rol puede consultar el estado de IA, pero no modificar credenciales ni activación.</p></section>
   {% endif %}
 </section>
+<script>
+  (() => {
+    const model = document.querySelector('input[name="model"]');
+    const temperature = document.querySelector('#temperature');
+    const help = document.querySelector('#temperature-help');
+    if (!model || !temperature || !help) return;
+    const syncTemperatureCapability = () => {
+      const modern = model.value.trim().toLowerCase().startsWith('gpt-5');
+      temperature.readOnly = modern;
+      temperature.setAttribute('aria-disabled', modern ? 'true' : 'false');
+      help.textContent = modern
+        ? 'El modelo seleccionado no admite temperatura personalizada; el adaptador la omite.'
+        : `Configurada: ${temperature.value}`;
+    };
+    model.addEventListener('input', syncTemperatureCapability);
+    syncTemperatureCapability();
+  })();
+</script>
 {% endblock %}
