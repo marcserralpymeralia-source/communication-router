@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
@@ -9,15 +11,29 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.database import Base
-from app.db.models import Company, EmailSettings, Mailbox
+from app.db.models import AuditLog, Company, EmailSettings, Mailbox
 from app.mailboxes.service import get_mailbox, get_or_create_mailbox_sync_state
-from app.mailboxes.routes import test_mailbox, test_mailbox_smtp
+from app.mailboxes.routes import create_mailbox, test_mailbox, test_mailbox_smtp, update_mailbox
 from app.master.database import MasterBase
 from app.master.models import MailboxSyncState, MasterCompany
 from app.master.service import TenantRole, TenantUser
 from app.migrations.registry import _apply_tenant_mailboxes
 from app.settings.integrations import SYNC_LOCKS, _normalized_email_external_id
 from app.workers.jobs_worker import _email_job_context
+
+
+class FakeForm(dict):
+    def multi_items(self):
+        return list(self.items())
+
+
+class FakeRequest:
+    def __init__(self, form_data):
+        self.headers = {"accept": "text/html", "content-type": "application/x-www-form-urlencoded"}
+        self._form_data = FakeForm(form_data)
+
+    async def form(self):
+        return self._form_data
 
 
 class MailboxFoundationTests(unittest.TestCase):
@@ -155,6 +171,118 @@ class MailboxFoundationTests(unittest.TestCase):
                 response = test_mailbox_smtp(mailbox.id, request, db, user)
             self.assertEqual(response.status_code, 200)
             self.assertIs(smtp_test.call_args.args[0], mailbox)
+
+    def test_create_mailbox_is_disabled_and_returns_visible_save_feedback(self):
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="Tenant A"))
+            db.commit()
+            user = TenantUser(
+                id=1,
+                email="admin@example.com",
+                name="Admin",
+                is_active=True,
+                company_id=1,
+                company_name="Tenant A",
+                company_slug="tenant-a",
+                role=TenantRole("Administrador"),
+                membership_id=1,
+            )
+            request = FakeRequest(
+                {
+                    "name": "Nuevo buzón",
+                    "email_address": "nuevo@example.com",
+                    "imap_username": "nuevo@example.com",
+                    "imap_password_encrypted": "fake-password",
+                    "imap_host": "imap.example.com",
+                    "imap_port": "993",
+                    "imap_security": "ssl_tls",
+                    "inbox_folder": "INBOX",
+                }
+            )
+            with patch("app.mailboxes.routes.test_imap_connection") as connection_test:
+                response = asyncio.run(create_mailbox(request, db, master_db, user))
+
+            self.assertEqual(response.status_code, 303)
+            query = parse_qs(urlparse(response.headers["location"]).query)
+            self.assertEqual(query["mailbox_message"], ["Configuración IMAP guardada correctamente."])
+            self.assertNotIn("fake-password", response.headers["location"])
+            mailbox = db.scalar(select(Mailbox).where(Mailbox.company_id == 1))
+            self.assertIsNotNone(mailbox)
+            self.assertFalse(mailbox.enabled)
+            self.assertFalse(mailbox.auto_sync_enabled)
+            self.assertFalse(mailbox.smtp_enabled)
+            self.assertEqual(decrypt_secret(mailbox.imap_password_encrypted), "fake-password")
+            self.assertEqual(master_db.query(MailboxSyncState).count(), 1)
+            self.assertFalse(master_db.scalar(select(MailboxSyncState)).enabled)
+            connection_test.assert_not_called()
+
+    def test_update_mailbox_does_not_duplicate_or_activate_and_reports_feedback(self):
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="Tenant A"))
+            mailbox = Mailbox(company_id=1, name="Existente", email_address="existente@example.com", enabled=False, auto_sync_enabled=False)
+            db.add(mailbox)
+            db.commit()
+            db.refresh(mailbox)
+            user = TenantUser(
+                id=1,
+                email="admin@example.com",
+                name="Admin",
+                is_active=True,
+                company_id=1,
+                company_name="Tenant A",
+                company_slug="tenant-a",
+                role=TenantRole("Administrador"),
+                membership_id=1,
+            )
+            request = FakeRequest(
+                {
+                    "name": "Existente",
+                    "email_address": "existente@example.com",
+                    "imap_username": "existente@example.com",
+                    "imap_password_encrypted": "fake-password",
+                    "imap_host": "imap.example.com",
+                    "imap_port": "993",
+                    "imap_security": "ssl_tls",
+                    "inbox_folder": "INBOX",
+                }
+            )
+            with patch("app.mailboxes.routes.test_imap_connection") as connection_test:
+                response = asyncio.run(update_mailbox(mailbox.id, request, db, master_db, user))
+
+            self.assertEqual(response.status_code, 303)
+            query = parse_qs(urlparse(response.headers["location"]).query)
+            self.assertEqual(query["mailbox_message"], ["Configuración IMAP guardada correctamente."])
+            self.assertEqual(db.query(Mailbox).filter(Mailbox.company_id == 1).count(), 1)
+            saved = db.get(Mailbox, mailbox.id)
+            self.assertFalse(saved.enabled)
+            self.assertFalse(saved.auto_sync_enabled)
+            self.assertEqual(decrypt_secret(saved.imap_password_encrypted), "fake-password")
+            self.assertFalse(master_db.scalar(select(MailboxSyncState)).enabled)
+            self.assertEqual(db.scalar(select(AuditLog).where(AuditLog.action == "settings.mailbox.update")).entity_id, mailbox.id)
+            connection_test.assert_not_called()
+
+    def test_invalid_mailbox_save_returns_safe_visible_error(self):
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="Tenant A"))
+            db.commit()
+            user = TenantUser(
+                id=1,
+                email="admin@example.com",
+                name="Admin",
+                is_active=True,
+                company_id=1,
+                company_name="Tenant A",
+                company_slug="tenant-a",
+                role=TenantRole("Administrador"),
+                membership_id=1,
+            )
+            response = asyncio.run(create_mailbox(FakeRequest({"email_address": "no-es-email"}), db, master_db, user))
+
+            self.assertEqual(response.status_code, 303)
+            query = parse_qs(urlparse(response.headers["location"]).query)
+            self.assertTrue(query["mailbox_error"][0].startswith("No se ha podido guardar la configuración IMAP."))
+            self.assertNotIn("no-es-email", query["mailbox_error"][0])
+            self.assertEqual(db.query(Mailbox).filter(Mailbox.company_id == 1).count(), 0)
 
     def test_email_job_context_resolves_only_the_requested_mailbox(self):
         with self.tenant_session() as db, self.master_session() as master_db:

@@ -14,9 +14,13 @@
     </div>
   </header>
 
+  {% if message %}<div class="alert success" role="status">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert error" role="alert">{{ error }}</div>{% endif %}
+
   <section class="settings-grid">
     {% for mailbox in mailboxes %}
       {% set state = mailbox_states.get(mailbox.id) %}
+      {% set imap_configured = mailbox.imap_host and mailbox.imap_username and mailbox.imap_password_encrypted %}
       <article class="panel drawer-card">
         <div class="section-title-row">
           <div>
@@ -28,10 +32,16 @@
           </span>
         </div>
         <div class="settings-kpis">
+          <div><span>IMAP</span><strong>{{ "Configurado" if imap_configured else "Pendiente" }}</strong></div>
+          <div><span>Credenciales</span><strong>{{ "Configuradas" if mailbox.imap_password_encrypted else "Pendientes" }}</strong></div>
+          <div><span>Conexión</span><strong>{% if mailbox.last_imap_test_at is none %}No probada{% elif mailbox.last_imap_test_ok %}Correcta{% else %}Error{% endif %}</strong></div>
           <div><span>Proveedor</span><strong>{{ mailbox.provider }}</strong></div>
-          <div><span>IMAP</span><strong>{{ mailbox.imap_host or "Pendiente" }}</strong></div>
           <div><span>Sync</span><strong>{{ state.status if state else "Sin estado" }}</strong></div>
+          <div><span>Auto sync</span><strong>{{ "Activado" if mailbox.auto_sync_enabled else "Desactivado" }}</strong></div>
         </div>
+        {% if mailbox.last_imap_test_at %}
+          <p class="muted settings-status-note">Última prueba: {{ mailbox.last_imap_test_at }}</p>
+        {% endif %}
         {% if state and state.last_error_message %}
           <p class="muted settings-status-note">{{ state.last_error_message }}</p>
         {% endif %}

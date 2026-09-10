@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from email.utils import parseaddr
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -51,10 +52,25 @@ async def _form_data(request: Request) -> dict[str, str]:
     return {key: str(value) for key, value in form.multi_items() if not hasattr(value, "filename")}
 
 
-def _response(request: Request, payload: dict, *, redirect: str = "/settings/mailboxes", status_code: int = 303):
+def _response(
+    request: Request,
+    payload: dict,
+    *,
+    redirect: str = "/settings/mailboxes",
+    status_code: int = 303,
+    save_feedback: bool = False,
+):
     if "application/json" in (request.headers.get("accept") or "") or "application/json" in (request.headers.get("content-type") or ""):
         return JSONResponse(payload, status_code=status_code if status_code >= 400 else 200)
-    return RedirectResponse(redirect, status_code=status_code)
+    if save_feedback:
+        message = str(payload.get("message") or "").strip()
+        if payload.get("ok"):
+            feedback = {"mailbox_message": message or "Configuración IMAP guardada correctamente."}
+        else:
+            detail = f" {message}" if message else ""
+            feedback = {"mailbox_error": f"No se ha podido guardar la configuración IMAP.{detail}"}
+        redirect = f"{redirect}{'&' if '?' in redirect else '?'}{urlencode(feedback)}"
+    return RedirectResponse(redirect, status_code=303 if save_feedback else status_code)
 
 
 def _valid_email(value: str) -> bool:
@@ -106,6 +122,8 @@ def mailboxes_page(
             "mailbox_states": states,
             "can_edit": _can_edit(user),
             "can_test": _can_test(user),
+            "message": request.query_params.get("mailbox_message"),
+            "error": request.query_params.get("mailbox_error"),
         },
     )
 
@@ -138,19 +156,34 @@ async def create_mailbox(
     data = await _form_data(request)
     email_address = (data.get("email_address") or data.get("connected_email") or data.get("imap_username") or "").strip().lower()
     if not _valid_email(email_address):
-        return _response(request, {"ok": False, "message": "Indica una dirección de correo válida."}, status_code=400)
-    mailbox = Mailbox(company_id=user.company_id, name=(data.get("name") or email_address).strip(), email_address=email_address)
-    _save_mailbox(db, mailbox, data, user)
+        return _response(request, {"ok": False, "message": "Indica una dirección de correo válida."}, status_code=400, save_feedback=True)
+    mailbox = Mailbox(
+        company_id=user.company_id,
+        name=(data.get("name") or email_address).strip(),
+        email_address=email_address,
+        enabled=False,
+        auto_sync_enabled=False,
+        smtp_enabled=False,
+    )
     db.add(mailbox)
     try:
+        _save_mailbox(db, mailbox, data, user)
         db.commit()
         db.refresh(mailbox)
     except IntegrityError:
         db.rollback()
-        return _response(request, {"ok": False, "message": "Ya existe un buzón con esa dirección en este tenant."}, status_code=409)
+        return _response(request, {"ok": False, "message": "Ya existe un buzón con esa dirección en este tenant."}, status_code=409, save_feedback=True)
+    except Exception:
+        db.rollback()
+        return _response(request, {"ok": False, "message": "Revisa los datos introducidos e inténtalo de nuevo."}, status_code=400, save_feedback=True)
     get_or_create_mailbox_sync_state(master_db, mailbox)
     log_action(db, company_id=user.company_id, user=user, action="settings.mailbox.create", entity_type="mailbox", entity_id=mailbox.id, message="Buzón creado")
-    return _response(request, {"ok": True, "mailbox": serialize_mailbox(mailbox)}, redirect="/settings/mailboxes")
+    return _response(
+        request,
+        {"ok": True, "message": "Configuración IMAP guardada correctamente.", "mailbox": serialize_mailbox(mailbox)},
+        redirect="/settings/mailboxes",
+        save_feedback=True,
+    )
 
 
 @router.post("/{mailbox_id}")
@@ -169,16 +202,37 @@ async def update_mailbox(
     data = await _form_data(request)
     email_address = (data.get("email_address") or mailbox.email_address or "").strip().lower()
     if not _valid_email(email_address):
-        return _response(request, {"ok": False, "message": "Indica una dirección de correo válida."}, status_code=400)
+        return _response(request, {"ok": False, "message": "Indica una dirección de correo válida."}, status_code=400, save_feedback=True)
     mailbox.email_address = email_address
     _save_mailbox(db, mailbox, data, user)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
-        return _response(request, {"ok": False, "message": "Ya existe un buzón con esa dirección en este tenant."}, status_code=409)
+        return _response(request, {"ok": False, "message": "Ya existe un buzón con esa dirección en este tenant."}, status_code=409, save_feedback=True)
+    except Exception:
+        db.rollback()
+        return _response(request, {"ok": False, "message": "Revisa los datos introducidos e inténtalo de nuevo."}, status_code=400, save_feedback=True)
     state = get_or_create_mailbox_sync_state(master_db, mailbox)
-    return _response(request, {"ok": True, "mailbox": serialize_mailbox(mailbox), "sync_state": _serialize_state(state)})
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.mailbox.update",
+        entity_type="mailbox",
+        entity_id=mailbox.id,
+        message="Configuración del buzón guardada",
+    )
+    return _response(
+        request,
+        {
+            "ok": True,
+            "message": "Configuración IMAP guardada correctamente.",
+            "mailbox": serialize_mailbox(mailbox),
+            "sync_state": _serialize_state(state),
+        },
+        save_feedback=True,
+    )
 
 
 @router.post("/{mailbox_id}/toggle")
