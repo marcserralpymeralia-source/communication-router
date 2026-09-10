@@ -49,6 +49,7 @@ class FakeImapClient:
         self.select_status = select_status
         self.select_payload = select_payload
         self.search_calls: list[tuple] = []
+        self.select_calls: list[tuple] = []
         self.uid_calls: list[tuple] = []
         self.login_calls: list[tuple] = []
 
@@ -59,6 +60,7 @@ class FakeImapClient:
         return "OK", [b"logged in"]
 
     def select(self, *_args, **_kwargs):
+        self.select_calls.append((_args, _kwargs))
         return self.select_status, [self.select_payload]
 
     def status(self, mailbox: str, *_args, **_kwargs):
@@ -505,6 +507,8 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         ssl_mock.assert_called_once()
         self.assertEqual(client.login_calls[0][0], "demo@example.com")
+        self.assertTrue(client.select_calls[0][1]["readonly"])
+        self.assertEqual(client.uid_calls, [])
         tenant_db.close()
 
     def test_imap_connection_rejects_invalid_encrypted_password(self):

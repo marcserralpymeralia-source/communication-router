@@ -301,15 +301,8 @@ def test_imap_connection(settings: EmailSettings, *, request_id: str | None = No
         status, data = client.select(context["mailbox"], readonly=True)
         if status != "OK":
             return {"ok": False, "error_type": "mailbox_not_found", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": f"La carpeta {context['mailbox']} no está disponible."}
-        ids = _imap_uid_search(client, "UNSEEN" if settings.read_unread_only else "ALL")
-        if ids is None:
-            return {"ok": False, "error_type": "unexpected_error", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "No se pudieron listar correos."}
-        last_email = ""
-        if ids:
-            fetch_status, msg_data = client.uid("fetch", ids[-1], "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])")
-            if fetch_status == "OK" and msg_data and msg_data[0]:
-                last_email = msg_data[0][1].decode(errors="ignore").replace("\r", " ").replace("\n", " ")[:300]
-        return {"ok": True, "found": int((data[0] or b"0").decode(errors="ignore") or 0), "new": len(ids), "duplicates": 0, "last_email": last_email, "message": f"Conexion correcta. Correos en carpeta: {int((data[0] or b'0').decode(errors='ignore') or 0)}. Coinciden con el filtro: {len(ids)}."}
+        folder_count = int((data[0] or b"0").decode(errors="ignore") or 0)
+        return {"ok": True, "found": folder_count, "new": 0, "duplicates": 0, "last_email": "", "message": f"Conexion correcta. Carpeta accesible. Correos en carpeta: {folder_count}."}
     except (imaplib.IMAP4.error, socket.timeout, socket.gaierror, ssl.SSLError, ConnectionRefusedError, TimeoutError, OSError) as exc:
         message, error_type = _imap_connection_message(settings, exc)
         _log_imap_test_failure(settings, exc, request_id)
