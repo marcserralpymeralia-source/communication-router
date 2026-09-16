@@ -424,7 +424,7 @@ def _workbench_email_attachment_payload(
         return PlainTextResponse("No encontrado", status_code=404)
 
     try:
-        content = read_attachment(attachment.storage_path or "")
+        content = read_attachment(attachment.storage_path or "", tenant_id=attachment.company_id)
     except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
 

@@ -1494,6 +1494,7 @@ def _save_attachments(
         content_type = part.get_content_type() or "application/octet-stream"
         is_pdf = content_type == "application/pdf" or filename.lower().endswith(".pdf")
         storage_path = save_attachment(
+            tenant_id=company_id,
             filename=f"email-{email.id}-{filename}",
             payload=payload,
             content_type=content_type,
@@ -1569,6 +1570,7 @@ def _save_communication_attachments(
         filename = _safe_filename(part.get_filename() or f"adjunto-{count + 1}")
         content_type = part.get_content_type() or "application/octet-stream"
         storage_path = save_attachment(
+            tenant_id=company_id,
             filename=f"communication-{communication.id}-{filename}",
             payload=payload,
             content_type=content_type,
@@ -1588,7 +1590,7 @@ def _save_communication_attachments(
 
 def _extract_pdf_text(db: Session, attachment: EmailAttachment) -> None:
     try:
-        data = read_attachment(attachment.storage_path or "")
+        data = read_attachment(attachment.storage_path or "", tenant_id=attachment.company_id)
         text = _extract_text_from_pdf_bytes(data)
         if text.strip():
             attachment.extracted_text = text.strip()

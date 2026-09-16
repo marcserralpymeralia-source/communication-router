@@ -1169,7 +1169,7 @@ def view_attachment(order_id: int, attachment_id: int, db: Session = Depends(get
         return PlainTextResponse("No encontrado", status_code=404)
 
     try:
-        content = read_attachment(attachment.storage_path or "")
+        content = read_attachment(attachment.storage_path or "", tenant_id=attachment.company_id)
     except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
 
@@ -1191,7 +1191,7 @@ def preview_attachment(order_id: int, attachment_id: int, db: Session = Depends(
         return PlainTextResponse("No encontrado", status_code=404)
 
     try:
-        content = read_attachment(attachment.storage_path or "")
+        content = read_attachment(attachment.storage_path or "", tenant_id=attachment.company_id)
     except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
 

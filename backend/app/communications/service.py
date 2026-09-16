@@ -227,7 +227,7 @@ def _attachment_from_payload(
         return existing
 
     if payload is not None and not storage_ref:
-        storage_ref = save_attachment(filename=f"communication-{communication.id}-{filename}", payload=payload, content_type=mime_type)
+        storage_ref = save_attachment(tenant_id=communication.company_id, filename=f"communication-{communication.id}-{filename}", payload=payload, content_type=mime_type)
     if payload is not None and extraction_status is None:
         extraction = extract_attachment_text(payload, filename=filename, content_type=mime_type)
         extracted_text = extraction.text

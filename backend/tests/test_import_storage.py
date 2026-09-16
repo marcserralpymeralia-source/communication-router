@@ -63,7 +63,7 @@ class ImportStorageTests(unittest.TestCase):
         vercel_module.blob = blob_module
 
         with patch.dict(sys.modules, {"vercel": vercel_module, "vercel.blob": blob_module}):
-            content = read_attachment("https://blob.example.com/attachments/pedido.pdf")
+            content = read_attachment("https://blob.example.com/attachments/pedido.pdf", tenant_id=1)
 
         self.assertEqual(content, b"blob-bytes")
         self.assertTrue(calls["init"])
@@ -80,7 +80,7 @@ class ImportStorageTests(unittest.TestCase):
             clear=False,
         ):
             with self.assertRaisesRegex(RuntimeError, "Persistent attachment storage"):
-                save_attachment(filename="pedido.txt", payload=b"pedido", content_type="text/plain")
+                save_attachment(tenant_id=1, filename="pedido.txt", payload=b"pedido", content_type="text/plain")
 
 
 if __name__ == "__main__":

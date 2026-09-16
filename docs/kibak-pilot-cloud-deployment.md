@@ -31,8 +31,10 @@ Set `APP_ENV=staging`, `APP_SLUG=kibak`, an HTTPS `APP_URL`, explicit
 `ALLOWED_HOSTS` and explicit `CORS_ALLOWED_ORIGINS`. Set
 `RUN_WORKERS_IN_WEB=false` and use the private S3-compatible storage settings.
 Set the same `RELEASE_SHA`, master URL, encryption key and job settings on web
-and worker. Do not set `OPENAI_API_KEY` globally when tenant-scoped settings are
-the source of truth.
+and worker. Keep `AUTH_THROTTLING_ENABLED=true` on web and worker, and configure
+`TRUSTED_PROXY_IPS` only with proxy networks validated for the deployment; an
+untrusted `X-Forwarded-For` header is ignored. Do not set `OPENAI_API_KEY`
+globally when tenant-scoped settings are the source of truth.
 
 ## 4. Deploy services
 
@@ -47,6 +49,21 @@ GET /health/live
 GET /health/ready
 GET /health/tenant (with a tenant-admin session)
 ```
+
+The KIBAK master migration creates `auth_throttles`. Login throttling is backed
+by PostgreSQL, uses hashed IP and normalized-identity keys, and applies a
+temporary window to both dimensions. It is safe across web processes and
+restarts; successful login clears only the identity window, while the IP
+budget remains in place. The table should be included in normal database
+backups and is cleaned lazily during authentication.
+
+Persistent communication and mailbox attachments use the tenant-scoped storage
+adapter. Local references are written below `attachments/tenant-<id>` and S3
+objects below `<prefix>/tenants/<id>/`; reads and deletes reject another tenant,
+traversal and missing context. The worker receives and validates the tenant ID
+before dispatching jobs. Import previews remain temporary, while legacy mock
+PDFs and static branding uploads are outside the KIBAK pilot attachment path
+and require a separate durable-assets decision before public use.
 
 ## 5. Migrate and provision
 

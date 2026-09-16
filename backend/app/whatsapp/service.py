@@ -581,7 +581,7 @@ async def download_whatsapp_media(
 
             if attachment.storage_path:
                 try:
-                    stored_content = read_attachment(attachment.storage_path)
+                    stored_content = read_attachment(attachment.storage_path, tenant_id=attachment.company_id)
                 except Exception:  # noqa: BLE001
                     stored_content = None
                 if stored_content is not None:
@@ -641,6 +641,7 @@ async def download_whatsapp_media(
             content_type = str(media_info.get("mime_type") or attachment.content_type or "application/octet-stream")[:120]
             try:
                 storage_path = save_attachment(
+                    tenant_id=company_id,
                     filename=f"whatsapp-{company_id}-{message.id}-{filename}",
                     payload=content,
                     content_type=content_type,
@@ -2183,6 +2184,7 @@ def record_manual_response(
         extraction_error = "No se pudo guardar una copia local del adjunto enviado."
         try:
             storage_path = save_attachment(
+                tenant_id=company_id,
                 filename=filename,
                 payload=bytes(item.get("content") or b""),
                 content_type=str(item.get("content_type") or "application/octet-stream"),

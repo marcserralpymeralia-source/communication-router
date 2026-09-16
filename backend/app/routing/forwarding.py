@@ -374,7 +374,7 @@ def _build_message(
                 error_code="attachment_unavailable",
             )
         try:
-            payload = read_attachment(attachment.storage_ref)
+            payload = read_attachment(attachment.storage_ref, tenant_id=attachment.company_id)
         except Exception as exc:
             raise ForwardingDeliveryError(
                 _safe_error_message("attachment_unavailable"),

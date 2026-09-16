@@ -818,6 +818,9 @@ def _handle_tenant_jobs(
     *,
     max_jobs: int | None = None,
 ) -> dict[str, int]:
+    if int(tenant.company_id or 0) <= 0:
+        logger.error("worker tenant context missing; storage writes blocked")
+        return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 1}
     database_url = tenant.get_database_url()
     if not database_url:
         return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 0}
