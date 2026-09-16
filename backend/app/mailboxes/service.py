@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.encryption import mask_secret
 from app.db.models import Mailbox
+from app.mailboxes.google_oauth import mailbox_oauth_provider, mailbox_oauth_status
 from app.master.models import MailboxSyncState
 
 
@@ -80,6 +81,8 @@ def serialize_mailbox(mailbox: Mailbox) -> dict:
         "email_address": mailbox.email_address,
         "provider": mailbox.provider,
         "connection_method": mailbox.connection_method,
+        "oauth_provider": mailbox_oauth_provider(mailbox),
+        "oauth_status": mailbox_oauth_status(mailbox),
         "connected_email": mailbox.connected_email,
         "imap_host": mailbox.imap_host,
         "imap_port": mailbox.imap_port,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from datetime import datetime, timezone
 from email.utils import parseaddr
 from urllib.parse import urlencode
@@ -16,6 +17,18 @@ from app.db.models import Email, InboundMessage, Mailbox
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.mailboxes.service import get_mailbox, get_or_create_mailbox_sync_state, list_mailboxes, serialize_mailbox
+from app.mailboxes.google_oauth import (
+    GOOGLE_OAUTH_STATE_SESSION_KEY,
+    GoogleOAuthError,
+    build_google_authorization_url,
+    exchange_google_authorization_code,
+    fetch_google_account_email,
+    google_oauth_configured,
+    google_oauth_redirect_uri,
+    mailbox_oauth_provider,
+    new_oauth_state,
+    encrypt_refresh_token,
+)
 from app.master.database import get_master_db
 from app.master.models import MailboxSyncState
 from app.master.service import TenantUser
@@ -26,7 +39,7 @@ from app.tenancy.database import get_tenant_db
 router = APIRouter(prefix="/settings/mailboxes", tags=["mailboxes"])
 
 EDIT_FIELDS = [
-    "name", "provider", "connected_email", "imap_host", "imap_port", "imap_security",
+    "name", "provider", "connection_method", "connected_email", "imap_host", "imap_port", "imap_security",
     "imap_use_ssl", "imap_username", "imap_password_encrypted", "inbox_folder", "mailbox",
     "read_limit", "polling_frequency_minutes", "auto_sync_enabled", "read_unread_only",
     "smtp_provider", "smtp_enabled", "smtp_host", "smtp_port", "smtp_security", "smtp_username",
@@ -78,6 +91,11 @@ def _valid_email(value: str) -> bool:
     return bool(address and "@" in address and "." in address.rsplit("@", 1)[-1])
 
 
+def _oauth_feedback(message: str, *, ok: bool = False) -> RedirectResponse:
+    key = "mailbox_message" if ok else "mailbox_error"
+    return RedirectResponse(f"/settings/mailboxes?{urlencode({key: message})}", status_code=303)
+
+
 def _save_mailbox(db: Session, mailbox: Mailbox, data: dict[str, str], user: TenantUser) -> None:
     normalized = {key: data[key] for key in EDIT_FIELDS if key in data}
     update_with_form(mailbox, normalized, SECRET_FIELDS)
@@ -85,6 +103,13 @@ def _save_mailbox(db: Session, mailbox: Mailbox, data: dict[str, str], user: Ten
     mailbox.email_address = (data.get("email_address") or mailbox.email_address or mailbox.connected_email or mailbox.imap_username or "").strip().lower()
     mailbox.connected_email = (data.get("connected_email") or mailbox.email_address or "").strip() or None
     mailbox.inbox_folder = (mailbox.inbox_folder or mailbox.mailbox or "INBOX").strip() or "INBOX"
+    if mailbox.provider == "gmail" and mailbox.connection_method == "oauth2":
+        mailbox.imap_host = mailbox.imap_host or "imap.gmail.com"
+        mailbox.imap_port = mailbox.imap_port or 993
+        mailbox.imap_security = mailbox.imap_security or "ssl_tls"
+        mailbox.imap_use_ssl = True
+        mailbox.imap_username = mailbox.imap_username or mailbox.email_address
+        mailbox.imap_password_encrypted = None
     mailbox.updated_by = resolve_updated_by_id(db, user)
     mailbox.updated_at = datetime.now(timezone.utc)
 
@@ -142,6 +167,98 @@ def _serialize_state(state: MailboxSyncState | None) -> dict | None:
         "backfill_status": state.backfill_status,
         "backfill_last_uid": state.backfill_last_uid,
     }
+
+
+@router.get("/oauth/google/callback", name="google_mailbox_oauth_callback")
+def google_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not _can_edit(user):
+        return _oauth_feedback("No tienes permisos para conectar Google.")
+    stored = request.session.pop(GOOGLE_OAUTH_STATE_SESSION_KEY, None)
+    received_state = (state or "").strip()
+    if not isinstance(stored, dict) or not received_state or not hmac.compare_digest(str(stored.get("state") or ""), received_state):
+        return _oauth_feedback("La sesión de conexión con Google ha caducado. Recarga la pantalla.")
+    try:
+        expires_at = int(stored.get("expires_at") or 0)
+        company_id = int(stored.get("company_id"))
+        mailbox_id = int(stored.get("mailbox_id"))
+        user_id = int(stored.get("user_id"))
+    except (TypeError, ValueError):
+        return _oauth_feedback("La sesión de conexión con Google no es válida.")
+    if expires_at <= int(datetime.now(timezone.utc).timestamp()):
+        return _oauth_feedback("La sesión de conexión con Google ha caducado. Recarga la pantalla.")
+    if company_id != user.company_id or user_id != user.id:
+        return _oauth_feedback("La sesión de conexión no coincide con el tenant actual.")
+    mailbox = get_mailbox(db, user.company_id, mailbox_id)
+    if not mailbox:
+        return _oauth_feedback("No se encontró el buzón solicitado.")
+    if mailbox.enabled or mailbox.auto_sync_enabled:
+        return _oauth_feedback("Desactiva el buzón y la sincronización antes de conectar Google.")
+    if error or not code:
+        return _oauth_feedback("La autorización de Google no se ha completado.")
+    if mailbox.provider != "gmail" or mailbox.connection_method != "oauth2":
+        return _oauth_feedback("Selecciona Gmail y Google OAuth en la configuración del buzón.")
+    try:
+        redirect_uri = google_oauth_redirect_uri(request)
+        tokens = exchange_google_authorization_code(code, redirect_uri)
+        connected_email = fetch_google_account_email(tokens.access_token)
+    except GoogleOAuthError as exc:
+        log_action(db, company_id=user.company_id, user=user, action="settings.mailbox.oauth.google.failed", entity_type="mailbox", entity_id=mailbox.id, message=f"Conexión Google OAuth fallida: {exc.error_type}")
+        return _oauth_feedback(str(exc))
+    expected_email = (mailbox.email_address or "").strip().lower()
+    if not expected_email or connected_email != expected_email:
+        log_action(db, company_id=user.company_id, user=user, action="settings.mailbox.oauth.google.failed", entity_type="mailbox", entity_id=mailbox.id, message="La cuenta Google autorizada no coincide con el buzón.")
+        return _oauth_feedback("La cuenta Google autorizada no coincide con la dirección del buzón.")
+    mailbox.provider = "gmail"
+    mailbox.connection_method = "oauth2"
+    mailbox.connected_email = connected_email
+    mailbox.refresh_token_encrypted = encrypt_refresh_token(tokens.refresh_token or "")
+    mailbox.access_token_encrypted = None
+    mailbox.imap_password_encrypted = None
+    mailbox.updated_by = resolve_updated_by_id(db, user)
+    mailbox.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="settings.mailbox.oauth.google.connected", entity_type="mailbox", entity_id=mailbox.id, message="Buzón conectado con Google OAuth")
+    return _oauth_feedback("Google se ha conectado correctamente. El buzón sigue desactivado.", ok=True)
+
+
+@router.get("/{mailbox_id}/oauth/google/start", name="google_mailbox_oauth_start")
+def google_oauth_start(
+    mailbox_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not _can_edit(user):
+        return _oauth_feedback("No tienes permisos para conectar Google.")
+    mailbox = get_mailbox(db, user.company_id, mailbox_id)
+    if not mailbox:
+        return _oauth_feedback("No se encontró el buzón solicitado.")
+    if mailbox.provider != "gmail" or mailbox.connection_method != "oauth2":
+        return _oauth_feedback("Selecciona Gmail y Google OAuth en la configuración del buzón.")
+    if mailbox.enabled or mailbox.auto_sync_enabled:
+        return _oauth_feedback("Desactiva el buzón y la sincronización antes de conectar Google.")
+    if not google_oauth_configured():
+        return _oauth_feedback("La conexión Google OAuth todavía no está configurada en KIBAK.")
+    oauth_state = new_oauth_state(company_id=user.company_id, mailbox_id=mailbox.id, user_id=user.id)
+    request.session[GOOGLE_OAUTH_STATE_SESSION_KEY] = oauth_state
+    try:
+        redirect_uri = google_oauth_redirect_uri(request)
+        authorization_url = build_google_authorization_url(
+            state=oauth_state["state"],
+            redirect_uri=redirect_uri,
+            login_hint=mailbox.email_address,
+        )
+    except GoogleOAuthError as exc:
+        request.session.pop(GOOGLE_OAUTH_STATE_SESSION_KEY, None)
+        return _oauth_feedback(str(exc))
+    return RedirectResponse(authorization_url, status_code=307)
 
 
 @router.post("")

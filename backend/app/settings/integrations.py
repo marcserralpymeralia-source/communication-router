@@ -35,6 +35,7 @@ from app.messages.service import (
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.core.attachment_storage import read_attachment, save_attachment
+from app.mailboxes.google_oauth import GoogleOAuthError, authenticate_google_imap, mailbox_oauth_provider
 
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,26 @@ def _imap_password_status(settings: EmailSettings) -> tuple[str | None, str | No
     return password, None
 
 
+def _uses_google_oauth(settings: EmailSettings) -> bool:
+    return mailbox_oauth_provider(settings) == "google"
+
+
+def _imap_authenticate(client, settings: EmailSettings, password: str | None = None) -> None:
+    username = (settings.imap_username or "").strip()
+    if _uses_google_oauth(settings):
+        authenticate_google_imap(
+            client,
+            username=username,
+            refresh_token_encrypted=settings.refresh_token_encrypted,
+        )
+        return
+    if password is None:
+        password, error_message = _imap_password_status(settings)
+        if error_message or not password:
+            raise ValueError(error_message or "La configuración IMAP está incompleta.")
+    client.login(username, password)
+
+
 def _imap_connection_message(settings: EmailSettings, exc: Exception | None = None) -> tuple[str, str | None]:
     if exc is None:
         return "Conexion correcta.", None
@@ -78,6 +99,16 @@ def _imap_connection_message(settings: EmailSettings, exc: Exception | None = No
     provider = (settings.provider or "").strip().lower()
     host = (settings.imap_host or "").strip() or "imap.gmail.com"
     port = settings.imap_port or 993
+    if isinstance(exc, GoogleOAuthError):
+        messages = {
+            "oauth_not_configured": "La conexión Google OAuth no está configurada.",
+            "oauth_authorization_required": "El buzón todavía no está conectado con Google.",
+            "oauth_refresh_failed": "No se pudo renovar la autorización de Google.",
+            "oauth_revoked": "La autorización de Google ha sido revocada.",
+            "imap_authentication_failed": "Google rechazó la autenticación IMAP OAuth.",
+            "provider_error": "Google no pudo completar la autorización.",
+        }
+        return messages.get(exc.error_type, "No se pudo autenticar el buzón con Google."), exc.error_type
     if isinstance(exc, ssl.SSLError) or any(marker in normalized for marker in ("ssl", "tls", "certificate")):
         return "La configuración SSL/TLS no es válida.", "ssl_error"
     if any(marker in normalized for marker in ("authentication failed", "invalid credentials", "login failed", "auth failed", "bad credentials", "[authentificationfailed]", "[authenticationfailed]")):
@@ -144,13 +175,17 @@ def classify_integration_error(error: Exception | str) -> str:
 
 
 def validate_imap_config(settings: EmailSettings) -> dict:
-    password, error_message = _imap_password_status(settings)
-    if error_message:
-        return {"ok": False, "error_type": "invalid_configuration", "message": error_message}
-    if not settings.imap_host or not settings.imap_username or not password:
+    if not settings.imap_host or not settings.imap_username:
         return {"ok": False, "error_type": "invalid_configuration", "message": "La configuración IMAP está incompleta."}
     if (settings.imap_security or "").strip().lower() not in {"ssl_tls", "starttls", "none"}:
         return {"ok": False, "error_type": "invalid_configuration", "message": "La configuración SSL/TLS no es válida."}
+    if _uses_google_oauth(settings):
+        if not decrypt_secret(settings.refresh_token_encrypted):
+            return {"ok": False, "error_type": "oauth_authorization_required", "message": "El buzón todavía no está conectado con Google."}
+    else:
+        _password, error_message = _imap_password_status(settings)
+        if error_message:
+            return {"ok": False, "error_type": "invalid_configuration", "message": error_message}
     return {"ok": True, "error_type": None, "message": "Configuracion IMAP valida."}
 
 
@@ -286,18 +321,20 @@ def test_imap_connection(settings: EmailSettings, *, request_id: str | None = No
     validation = validate_imap_config(settings)
     if not validation["ok"]:
         return {"ok": False, "error_type": validation["error_type"], "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": validation["message"]}
-    password, error_message = _imap_password_status(settings)
-    if error_message:
-        return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": error_message}
-    if not password:
-        return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "La configuración IMAP está incompleta."}
+    password = None
+    if not _uses_google_oauth(settings):
+        password, error_message = _imap_password_status(settings)
+        if error_message:
+            return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": error_message}
+        if not password:
+            return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "La configuración IMAP está incompleta."}
     context = _imap_test_context(settings, request_id)
     client = None
     try:
         if context["security"] not in {"ssl_tls", "starttls", "none"}:
             return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "La configuración SSL/TLS no es válida."}
         client = _imap_client(settings)
-        client.login((settings.imap_username or "").strip(), password)
+        _imap_authenticate(client, settings, password)
         status, data = client.select(context["mailbox"], readonly=True)
         if status != "OK":
             return {"ok": False, "error_type": "mailbox_not_found", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": f"La carpeta {context['mailbox']} no está disponible."}
@@ -324,11 +361,10 @@ def preview_initial_imap_sync(settings: EmailSettings) -> dict:
     if not validation["ok"]:
         return {"ok": False, "message": validation["message"]}
     plan = _initial_history_plan(settings)
-    password = decrypt_secret(settings.imap_password_encrypted)
     mailbox = settings.mailbox or settings.inbox_folder or "INBOX"
     try:
         client = _imap_client(settings)
-        client.login(settings.imap_username, password)
+        _imap_authenticate(client, settings)
         status, _ = client.select(mailbox, readonly=True)
         if status != "OK":
             client.logout()
@@ -664,9 +700,9 @@ def _fetch_imap_emails(
         and callable(get_bind)
         and get_bind().dialect.name == "postgresql"
     )
-    password = decrypt_secret(settings.imap_password_encrypted)
-    if not settings.imap_host or not settings.imap_username or not password:
-        return {"ok": False, "found": 0, "saved": 0, "message": "Faltan host, usuario o password IMAP."}
+    validation = validate_imap_config(settings)
+    if not validation["ok"]:
+        return {"ok": False, "found": 0, "saved": 0, "message": validation["message"]}
     sync_lock = SYNC_LOCKS.setdefault((company_id, mailbox_id), threading.Lock())
     if not sync_lock.acquire(blocking=False):
         return {"ok": False, "found": 0, "saved": 0, "message": "Ya hay una sincronizacion IMAP en curso."}
@@ -691,7 +727,7 @@ def _fetch_imap_emails(
     log_action(db, company_id=company_id, user=None, action="email.fetch_started", entity_type="email", message=f"{label} iniciada")
     try:
         client = _imap_client(settings)
-        client.login(settings.imap_username, password)
+        _imap_authenticate(client, settings)
         client.select(mailbox, readonly=not settings.mark_as_read_after_import)
         uidvalidity = _imap_uidvalidity(client, mailbox)
         effective_start_uid = start_uid

@@ -21,6 +21,8 @@
     {% for mailbox in mailboxes %}
       {% set state = mailbox_states.get(mailbox.id) %}
       {% set imap_configured = mailbox.imap_host and mailbox.imap_username and mailbox.imap_password_encrypted %}
+      {% set google_oauth = mailbox.provider == "gmail" and mailbox.connection_method == "oauth2" %}
+      {% set google_connected = google_oauth and mailbox.refresh_token_encrypted %}
       <article class="panel drawer-card">
         <div class="section-title-row">
           <div>
@@ -36,6 +38,8 @@
           <div><span>Credenciales</span><strong>{{ "Configuradas" if mailbox.imap_password_encrypted else "Pendientes" }}</strong></div>
           <div><span>Conexión</span><strong>{% if mailbox.last_imap_test_at is none %}No probada{% elif mailbox.last_imap_test_ok %}Correcta{% else %}Error{% endif %}</strong></div>
           <div><span>Proveedor</span><strong>{{ mailbox.provider }}</strong></div>
+          <div><span>Autenticación</span><strong>{% if google_oauth %}Google OAuth{% else %}Usuario y contraseña{% endif %}</strong></div>
+          {% if google_oauth %}<div><span>OAuth Google</span><strong>{{ "Conectado" if google_connected else "No conectado" }}</strong></div>{% endif %}
           <div><span>Sync</span><strong>{{ state.status if state else "Sin estado" }}</strong></div>
           <div><span>Auto sync</span><strong>{{ "Activado" if mailbox.auto_sync_enabled else "Desactivado" }}</strong></div>
         </div>
@@ -61,6 +65,12 @@
               <button class="secondary compact-button" data-loading-text="Encolando...">Backfill</button>
             </form>
           {% endif %}
+          {% if can_edit and google_oauth and not google_connected %}
+            <a class="button secondary compact-button" href="/settings/mailboxes/{{ mailbox.id }}/oauth/google/start">Conectar con Google</a>
+          {% endif %}
+          {% if google_connected %}
+            <span class="muted compact-button">Cuenta conectada: {{ mailbox.connected_email }}</span>
+          {% endif %}
           {% if can_edit %}
             <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/toggle">
               <button class="secondary compact-button">{{ "Desactivar" if mailbox.enabled else "Activar" }}</button>
@@ -81,8 +91,14 @@
                     <option value="microsoft365" {% if mailbox.provider == "microsoft365" %}selected{% endif %}>Microsoft 365</option>
                   </select>
                 </label>
+                <label>Método de autenticación
+                  <select name="connection_method">
+                    <option value="password" {% if mailbox.connection_method != "oauth2" %}selected{% endif %}>Usuario y contraseña</option>
+                    <option value="oauth2" {% if mailbox.connection_method == "oauth2" %}selected{% endif %}>Google OAuth</option>
+                  </select>
+                </label>
                 <label>Usuario IMAP<input name="imap_username" value="{{ mailbox.imap_username or '' }}"></label>
-                <label>Contraseña IMAP<input name="imap_password_encrypted" type="password" placeholder="{{ 'Configurada' if mailbox.imap_password_encrypted else 'Añadir contraseña' }}"></label>
+                {% if not google_oauth %}<label>Contraseña IMAP<input name="imap_password_encrypted" type="password" placeholder="{{ 'Configurada' if mailbox.imap_password_encrypted else 'Añadir contraseña' }}"></label>{% endif %}
                 <label>Host IMAP<input name="imap_host" value="{{ mailbox.imap_host or '' }}"></label>
                 <label>Puerto IMAP<input name="imap_port" type="number" value="{{ mailbox.imap_port }}"></label>
                 <label>Seguridad

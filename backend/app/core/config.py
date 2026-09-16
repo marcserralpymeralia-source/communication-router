@@ -124,6 +124,14 @@ class Settings(BaseSettings):
     job_retry_max_seconds: int = Field(default=300, validation_alias="JOB_RETRY_MAX_SECONDS")
     job_stale_after_seconds: int = Field(default=900, validation_alias="JOB_STALE_AFTER_SECONDS")
     app_url: str = "http://127.0.0.1:8000"
+    google_oauth_client_id: str = Field(default="", validation_alias="GOOGLE_OAUTH_CLIENT_ID")
+    google_oauth_client_secret: str = Field(default="", validation_alias="GOOGLE_OAUTH_CLIENT_SECRET")
+    google_oauth_redirect_uri: str = Field(default="", validation_alias="GOOGLE_OAUTH_REDIRECT_URI")
+    google_oauth_scopes: str = Field(
+        default="https://mail.google.com/ https://www.googleapis.com/auth/userinfo.email",
+        validation_alias="GOOGLE_OAUTH_SCOPES",
+    )
+    google_oauth_timeout_seconds: int = Field(default=20, validation_alias="GOOGLE_OAUTH_TIMEOUT_SECONDS")
     meta_app_id: str = Field(default="", validation_alias=AliasChoices("META_APP_ID", "FB_APP_ID"))
     meta_app_secret: str = Field(default="", validation_alias=AliasChoices("META_APP_SECRET", "FB_APP_SECRET"))
     meta_embedded_signup_config_id: str = Field(
@@ -211,6 +219,8 @@ class Settings(BaseSettings):
             self.session_max_age = 60 * 60 * 24 * 7
         if self.session_max_age <= 0:
             raise ValueError("SESSION_MAX_AGE must be greater than zero")
+        if self.google_oauth_timeout_seconds <= 0:
+            raise ValueError("GOOGLE_OAUTH_TIMEOUT_SECONDS must be greater than zero")
 
         if self.job_poll_interval_seconds is not None:
             self.job_worker_poll_seconds = int(self.job_poll_interval_seconds)
