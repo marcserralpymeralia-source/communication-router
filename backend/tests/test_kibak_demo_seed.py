@@ -23,6 +23,7 @@ from app.master.database import MasterBase
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
 from scripts.seed_kibak_demo import (
     DEMO_RESET_CONFIRMATION,
+    SOURCE_EMAIL_EXAMPLES,
     demo_runtime_guard,
     reset_demo,
     seed_demo,
@@ -62,13 +63,13 @@ class KibakDemoSeedTests(unittest.TestCase):
         self.assertEqual(summary["company"], "Empresa Demo")
         self.assertEqual(summary["departments"], 6)
         self.assertEqual(summary["mailboxes"], 3)
-        self.assertEqual(summary["communications"], 22)
+        self.assertEqual(summary["communications"], 46)
         self.assertEqual(summary["routing_corrections"], 1)
         self.assertEqual(summary["routing_actions"], 4)
         self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(Department)), 6)
         self.assertGreaterEqual(self.tenant_db.scalar(select(func.count()).select_from(DepartmentKnowledge)), 18)
-        self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(Communication)), 22)
-        self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(RoutingDecision)), 22)
+        self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(Communication)), 46)
+        self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(RoutingDecision)), 46)
         self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(RoutingCorrection)), 1)
         self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(RoutingAction)), 4)
         self.assertEqual(self.master_db.scalar(select(func.count()).select_from(MasterUser)), 4)
@@ -86,10 +87,27 @@ class KibakDemoSeedTests(unittest.TestCase):
         self.assertIsNone(llm.api_key_encrypted)
 
         self._seed()
-        self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(Communication)), 22)
+        self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(Communication)), 46)
         self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(RoutingCorrection)), 1)
         self.assertEqual(self.tenant_db.scalar(select(func.count()).select_from(RoutingAction)), 4)
         self.assertEqual(self.master_db.scalar(select(func.count()).select_from(MasterCompany)), 1)
+
+    def test_source_email_examples_have_demo_routing_outcomes(self):
+        self._seed()
+        self.assertEqual(len(SOURCE_EMAIL_EXAMPLES), 24)
+        examples = self.tenant_db.scalars(
+            select(Communication).where(Communication.external_message_id.like("kibak-demo-%"))
+        ).all()
+        by_sender = {item.sender_email: item for item in examples}
+        self.assertIn("marialuisa.barcon@es.issworld.com", by_sender)
+        self.assertIn("elixabet.almandoz@jcyl.es", by_sender)
+        self.assertIn("gallegomt@diba.cat", by_sender)
+        self.assertEqual(len(examples), 46)
+        self.assertTrue(all(item.provider == "demo" for item in examples))
+        self.assertEqual(
+            self.tenant_db.scalar(select(func.count()).select_from(RoutingDecision)),
+            46,
+        )
 
     def test_reset_requires_confirmation_and_only_removes_demo(self):
         self._seed()
