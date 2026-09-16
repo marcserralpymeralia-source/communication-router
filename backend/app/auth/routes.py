@@ -4,9 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.auth.redirects import DEFAULT_LOGIN_DESTINATION, safe_internal_next
 from app.auth.service import authenticate_user
+from app.auth.throttle import AuthThrottleStore, AuthThrottleUnavailable, throttling_enabled
 from app.core.templating import templates
 from app.master.models import MasterCompany
 from app.core.config import get_settings
@@ -42,9 +44,57 @@ def login(
     master_db: Session = Depends(get_master_db),
 ):
     next_url = safe_internal_next(next)
+    throttle = None
+    if throttling_enabled():
+        throttle = AuthThrottleStore(master_db, request)
+        try:
+            decision = throttle.check(email)
+        except (AuthThrottleUnavailable, SQLAlchemyError):
+            master_db.rollback()
+            logger.exception("auth.rate_limited_store_unavailable")
+            return templates.TemplateResponse(
+                "login.html",
+                {
+                    "request": request,
+                    "error": "No se puede procesar el acceso en este momento. Inténtalo de nuevo más tarde.",
+                    "next_url": next_url,
+                    "login_branding": branding_to_dict(default_branding_payload()),
+                },
+                status_code=503,
+            )
+        if not decision.allowed:
+            logger.warning("auth.rate_limited", extra={"event": "auth.rate_limited", "reason": "temporary_throttle"})
+            return templates.TemplateResponse(
+                "login.html",
+                {
+                    "request": request,
+                    "error": "Demasiados intentos. Inténtalo de nuevo dentro de unos minutos.",
+                    "next_url": next_url,
+                    "login_branding": branding_to_dict(default_branding_payload()),
+                },
+                status_code=429,
+                headers={"Retry-After": str(max(decision.retry_after_seconds, 1))},
+            )
     user = authenticate_user(master_db, email, password)
 
     if not user:
+        if throttle is not None:
+            try:
+                throttle.record_failure(email)
+                master_db.commit()
+            except (AuthThrottleUnavailable, SQLAlchemyError):
+                master_db.rollback()
+                logger.exception("auth.rate_limited_store_unavailable")
+                return templates.TemplateResponse(
+                    "login.html",
+                    {
+                        "request": request,
+                        "error": "No se puede procesar el acceso en este momento. Inténtalo de nuevo más tarde.",
+                        "next_url": next_url,
+                        "login_branding": branding_to_dict(default_branding_payload()),
+                    },
+                    status_code=503,
+                )
         return templates.TemplateResponse(
             "login.html",
             {
@@ -55,6 +105,24 @@ def login(
             },
             status_code=401,
         )
+
+    if throttle is not None:
+        try:
+            throttle.record_success(email)
+            master_db.commit()
+        except (AuthThrottleUnavailable, SQLAlchemyError):
+            master_db.rollback()
+            logger.exception("auth.rate_limited_store_unavailable")
+            return templates.TemplateResponse(
+                "login.html",
+                {
+                    "request": request,
+                    "error": "No se puede procesar el acceso en este momento. Inténtalo de nuevo más tarde.",
+                    "next_url": next_url,
+                    "login_branding": branding_to_dict(default_branding_payload()),
+                },
+                status_code=503,
+            )
 
     request.session["user_id"] = user.id
     request.session["company_id"] = user.company_id

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import get_settings
 from app.master.database import MasterBase
 from app.master.models import MasterSchemaMigration
 from app.migrations.helpers import ensure_columns, existing_columns, table_exists
@@ -12,6 +13,10 @@ from app.migrations.registry import (
     CURRENT_MASTER_SCHEMA_CHECKSUM,
     CURRENT_MASTER_SCHEMA_NAME,
     CURRENT_MASTER_SCHEMA_VERSION,
+    CURRENT_KIBAK_MASTER_SCHEMA_CHECKSUM,
+    CURRENT_KIBAK_MASTER_SCHEMA_NAME,
+    CURRENT_KIBAK_MASTER_SCHEMA_VERSION,
+    KIBAK_MASTER_SCHEMA_MIGRATIONS,
     MASTER_SCHEMA_MIGRATIONS,
 )
 from app.migrations.kibak_baseline import KIBAK_MASTER_BASELINE_VERSION
@@ -38,6 +43,28 @@ def _now() -> datetime:
 
 def _latest_state(db: Session) -> MasterSchemaMigration | None:
     return db.scalar(select(MasterSchemaMigration).order_by(MasterSchemaMigration.applied_at.desc().nullslast(), MasterSchemaMigration.id.desc()))
+
+
+def _master_migration_config(db: Session) -> tuple[list, str, str, str, set[str]]:
+    is_kibak_postgres = (
+        get_settings().app_slug.strip().lower() == "kibak"
+        and not db.get_bind().url.drivername.startswith("sqlite")
+    )
+    if is_kibak_postgres:
+        return (
+            KIBAK_MASTER_SCHEMA_MIGRATIONS,
+            CURRENT_KIBAK_MASTER_SCHEMA_VERSION,
+            CURRENT_KIBAK_MASTER_SCHEMA_NAME,
+            CURRENT_KIBAK_MASTER_SCHEMA_CHECKSUM,
+            {KIBAK_MASTER_BASELINE_VERSION},
+        )
+    return (
+        MASTER_SCHEMA_MIGRATIONS,
+        CURRENT_MASTER_SCHEMA_VERSION,
+        CURRENT_MASTER_SCHEMA_NAME,
+        CURRENT_MASTER_SCHEMA_CHECKSUM,
+        set(),
+    )
 
 
 def ensure_master_migration_record(
@@ -91,17 +118,31 @@ def upgrade_master_schema(
     baseline: bool = False,
 ) -> dict:
     if not dry_run:
-        MasterBase.metadata.create_all(bind=engine)
+        is_kibak_postgres = (
+            get_settings().app_slug.strip().lower() == "kibak"
+            and not engine.url.drivername.startswith("sqlite")
+        )
+        if is_kibak_postgres:
+            from app.migrations.kibak_baseline import KIBAK_MASTER_TABLES
+
+            MasterBase.metadata.create_all(
+                bind=engine,
+                tables=[MasterBase.metadata.tables[name] for name in KIBAK_MASTER_TABLES],
+            )
+        else:
+            MasterBase.metadata.create_all(bind=engine)
         ensure_columns(engine, "schema_migrations", MASTER_MIGRATION_COLUMNS, dry_run=False)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = session_factory()
     try:
+        migration_specs, current_version, current_name, current_checksum, allowed_legacy_versions = _master_migration_config(db)
         summary = run_migration_plan(
             engine,
             db,
             MasterSchemaMigration,
-            MASTER_SCHEMA_MIGRATIONS,
+            migration_specs,
             application_version=application_version,
+            allowed_legacy_versions=allowed_legacy_versions,
             baseline=baseline,
             dry_run=dry_run,
         )
@@ -110,9 +151,9 @@ def upgrade_master_schema(
             summary.update(
                 migration_summary(
                     state,
-                    current_version=CURRENT_MASTER_SCHEMA_VERSION,
-                    current_name=CURRENT_MASTER_SCHEMA_NAME,
-                    current_checksum=CURRENT_MASTER_SCHEMA_CHECKSUM,
+                    current_version=current_version,
+                    current_name=current_name,
+                    current_checksum=current_checksum,
                 )
             )
         return summary
@@ -123,7 +164,7 @@ def upgrade_master_schema(
 def master_migration_report(db: Session, *, persist: bool = False) -> dict:
     schema_table_exists = table_exists(db.get_bind(), "schema_migrations")
     state = _latest_state(db) if schema_table_exists else None
-    current_version, current_name, current_checksum = _master_contract(state)
+    _, current_version, current_name, current_checksum, _ = _master_migration_config(db)
     if not schema_table_exists:
         return {
             "version": None,

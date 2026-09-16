@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -59,6 +59,9 @@ def run_checks(*, check_database: bool = True) -> list[tuple[str, str, str]]:
     master_db = None
     try:
         master_db = MasterSessionLocal()
+        auth_table_exists = "auth_throttles" in inspect(master_db.get_bind()).get_table_names()
+        auth_ok = bool(settings.auth_throttling_enabled and auth_table_exists)
+        _check(results, "Auth throttling", "PASS" if auth_ok else "FAIL", "PostgreSQL distribuido activo" if auth_ok else "falta auth_throttles o está desactivado")
         tenants = master_db.scalars(select(MasterTenantDatabase).where(MasterTenantDatabase.is_active.is_(True))).all()
         if not tenants:
             _check(results, "Tenant records", "WARN", "no hay tenants activos")

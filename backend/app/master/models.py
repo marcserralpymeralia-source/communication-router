@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
@@ -113,6 +113,27 @@ class MasterTenantDatabase(MasterBase):
     def get_database_url(self) -> str | None:
         """Return the usable URL; the mapped column is encrypted at rest."""
         return self.database_url
+
+
+class AuthThrottle(MasterBase):
+    """Database-backed login throttling state; key_hash is never plaintext identity."""
+
+    __tablename__ = "auth_throttles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope: Mapped[str] = mapped_column(String(20))
+    key_hash: Mapped[str] = mapped_column(String(128))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    blocked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("scope", "key_hash", name="uq_auth_throttle_scope_key"),
+        Index("ix_auth_throttles_blocked_until", "blocked_until"),
+    )
 
 
 class EmailSyncState(MasterBase):

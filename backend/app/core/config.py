@@ -179,6 +179,8 @@ class Settings(BaseSettings):
     s3_access_key_id: str | None = Field(default=None, validation_alias="S3_ACCESS_KEY_ID")
     s3_secret_access_key: SecretStr | None = Field(default=None, validation_alias="S3_SECRET_ACCESS_KEY")
     s3_prefix: str = Field(default="kibak", validation_alias="S3_PREFIX")
+    auth_throttling_enabled: bool | None = Field(default=None, validation_alias="AUTH_THROTTLING_ENABLED")
+    trusted_proxy_ips_raw: str | None = Field(default=None, validation_alias="TRUSTED_PROXY_IPS")
     email_signature_text: str = "Equipo KIBAK"
     log_format: str = Field(default="json", validation_alias=AliasChoices("LOG_FORMAT", "APP_LOG_FORMAT"))
     log_level: str = Field(default="info", validation_alias=AliasChoices("LOG_LEVEL", "APP_LOG_LEVEL"))
@@ -265,6 +267,8 @@ class Settings(BaseSettings):
         self.s3_prefix = (self.s3_prefix or "kibak").strip().strip("/") or "kibak"
         if self.run_workers_in_web is None:
             self.run_workers_in_web = self.environment in {"development", "demo", "test"} and not running_on_vercel
+        if self.auth_throttling_enabled is None:
+            self.auth_throttling_enabled = self.environment in {"staging", "production"}
         if self.environment == "production" and self.performance_profiling_enabled:
             raise ValueError("PERFORMANCE_PROFILING_ENABLED cannot be enabled in production")
 
@@ -334,6 +338,10 @@ class Settings(BaseSettings):
                 raise ValueError("Staging requires external PostgreSQL master and tenant databases")
             if self.storage_backend == "local":
                 raise ValueError("STORAGE_BACKEND must be s3 in staging")
+            if not self.auth_throttling_enabled:
+                raise ValueError("AUTH_THROTTLING_ENABLED must be enabled in staging")
+        if self.environment == "production" and not self.auth_throttling_enabled:
+            raise ValueError("AUTH_THROTTLING_ENABLED must be enabled in production")
 
         return self
 
@@ -354,6 +362,10 @@ class Settings(BaseSettings):
         if self.environment in {"development", "test"}:
             return LOCAL_ALLOWED_HOSTS.copy()
         return []
+
+    @property
+    def trusted_proxy_ips(self) -> list[str]:
+        return _split_csv(self.trusted_proxy_ips_raw)
 
     @property
     def encryption_key(self) -> str:

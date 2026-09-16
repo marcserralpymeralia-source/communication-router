@@ -1135,6 +1135,18 @@ def _apply_master_mailbox_sync_state(engine, dry_run: bool) -> list[str]:  # noq
     return actions
 
 
+def _apply_kibak_master_auth_throttles(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.master.models import AuthThrottle
+
+    with engine.connect() as conn:
+        exists = "auth_throttles" in inspect(conn).get_table_names()
+    if exists:
+        return []
+    if not dry_run:
+        AuthThrottle.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE auth_throttles (...)"]
+
+
 def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import LearningProposal, PromptExecution
 
@@ -1511,6 +1523,15 @@ MASTER_SCHEMA_MIGRATIONS = [
     ),
 ]
 
+KIBAK_MASTER_SCHEMA_MIGRATIONS = [
+    MigrationSpec(
+        version="2026.09.16.1",
+        name="KIBAK distributed authentication throttling",
+        checksum=checksum_text("kibak", "auth_throttles", "scope", "key_hash", "blocked_until"),
+        upgrade=_apply_kibak_master_auth_throttles,
+    ),
+]
+
 CURRENT_TENANT_SCHEMA_VERSION = TENANT_SCHEMA_MIGRATIONS[-1].version
 CURRENT_TENANT_SCHEMA_NAME = TENANT_SCHEMA_MIGRATIONS[-1].name
 CURRENT_TENANT_SCHEMA_CHECKSUM = registry_checksum(TENANT_SCHEMA_MIGRATIONS)
@@ -1523,3 +1544,6 @@ CURRENT_MASTER_SCHEMA_VERSION = MASTER_SCHEMA_MIGRATIONS[-1].version
 CURRENT_MASTER_SCHEMA_NAME = MASTER_SCHEMA_MIGRATIONS[-1].name
 CURRENT_MASTER_SCHEMA_CHECKSUM = registry_checksum(MASTER_SCHEMA_MIGRATIONS)
 SUPPORTED_MASTER_LEGACY_VERSIONS: set[str] = set()
+CURRENT_KIBAK_MASTER_SCHEMA_VERSION = KIBAK_MASTER_SCHEMA_MIGRATIONS[-1].version
+CURRENT_KIBAK_MASTER_SCHEMA_NAME = KIBAK_MASTER_SCHEMA_MIGRATIONS[-1].name
+CURRENT_KIBAK_MASTER_SCHEMA_CHECKSUM = registry_checksum(KIBAK_MASTER_SCHEMA_MIGRATIONS)
