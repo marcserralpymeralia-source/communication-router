@@ -38,6 +38,11 @@ def run_checks(*, check_database: bool = True) -> list[tuple[str, str, str]]:
 
     _check(results, "APP_SLUG", "PASS" if settings.app_slug == "kibak" else "FAIL", "kibak" if settings.app_slug == "kibak" else "debe ser kibak")
     _check(results, "APP_ENV", "PASS" if settings.environment == "staging" else "FAIL", settings.environment)
+    _check(results, "Deployment mode", "PASS", settings.deployment_mode)
+    if settings.pilot_free_mode:
+        _check(results, "Worker topology", "PASS" if settings.run_workers_in_web else "FAIL", "worker de jobs interno, concurrency 1" if settings.run_workers_in_web else "free_pilot requiere worker interno")
+    else:
+        _check(results, "Worker topology", "PASS", "worker separado requerido por el modo standard")
     parsed_url = urlsplit(settings.app_url.strip())
     url_ok = parsed_url.scheme == "https" and bool(parsed_url.hostname) and not parsed_url.username and not parsed_url.password
     _check(results, "APP_URL", "PASS" if url_ok else "FAIL", "HTTPS sin credenciales" if url_ok else "debe ser HTTPS sin credenciales")

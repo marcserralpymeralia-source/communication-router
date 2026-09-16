@@ -36,6 +36,12 @@ and worker. Keep `AUTH_THROTTLING_ENABLED=true` on web and worker, and configure
 untrusted `X-Forwarded-For` header is ignored. Do not set `OPENAI_API_KEY`
 globally when tenant-scoped settings are the source of truth.
 
+For the one-service free pilot, use `DEPLOYMENT_MODE=free_pilot`,
+`PILOT_FREE_MODE=true` and `RUN_WORKERS_IN_WEB=true`; follow
+`docs/kibak-free-pilot-deployment.md` instead of creating the background
+worker. The standard `DEPLOYMENT_MODE=standard` profile above remains the
+recommended production path.
+
 ## 4. Deploy services
 
 Create `kibak-pilot-web` and `kibak-pilot-worker` from the same commit. Use the

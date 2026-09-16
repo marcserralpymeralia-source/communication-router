@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.templating import templates
 from app.core.config import get_settings
+from app.core.config import effective_email_batch_limit
 from app.core.attachment_storage import TenantStorageError
 from app.core.middleware import invalidate_branding_cache
 from app.auth.dependencies import current_user
@@ -1272,6 +1273,8 @@ def test_email_imap(request: Request, db: Session = Depends(get_tenant_db), user
 def test_email_smtp(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_test_email_settings(user):
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
+    if get_settings().is_free_pilot:
+        return RedirectResponse("/settings#email-diagnostics", status_code=303)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     result = test_smtp_connection(settings)
     settings.last_smtp_test_at = datetime.now(timezone.utc)
@@ -1285,6 +1288,8 @@ def test_email_smtp(db: Session = Depends(get_tenant_db), user: TenantUser = Dep
 @router.post("/email/smtp/send-test")
 def send_email_test(to_email: str = Form(...), subject: str = Form("Prueba SMTP"), message: str = Form("Correo de prueba enviado desde Anchi."), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_test_email_settings(user):
+        return RedirectResponse("/settings#email-diagnostics", status_code=303)
+    if get_settings().is_free_pilot:
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     result = send_test_email(settings, to_email, subject, message)
@@ -1304,7 +1309,7 @@ def read_email(request: Request, db: Session = Depends(get_tenant_db), user: Ten
         extra={"event": "settings.email.read.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
     )
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
+    safe_limit = effective_email_batch_limit(settings.read_limit, standard_default=10, standard_max=50)
     job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False, "limit": safe_limit}, created_by_user_id=user.id)
     logger.info(
         "settings.email.read.requested",
@@ -1334,7 +1339,7 @@ def read_unprocessed_email(request: Request, db: Session = Depends(get_tenant_db
         extra={"event": "settings.email.read_unprocessed.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
     )
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
+    safe_limit = effective_email_batch_limit(settings.read_limit, standard_default=10, standard_max=50)
     job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": True, "limit": safe_limit}, created_by_user_id=user.id)
     logger.info(
         "settings.email.read_unprocessed.requested",
@@ -1361,7 +1366,7 @@ def backfill_email_history(
     request: Request,
     from_date: str = Form(""),
     to_date: str = Form(""),
-    limit: int = Form(100),
+    limit: int | None = Form(None),
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
@@ -1374,7 +1379,7 @@ def backfill_email_history(
     to_date_value = _parse_date_input(to_date)
     if from_date_value and to_date_value and to_date_value < from_date_value:
         return JSONResponse({"ok": False, "message": "La fecha final no puede ser anterior a la inicial."}, status_code=400)
-    safe_limit = max(min(int(limit or 100), 100), 1)
+    safe_limit = effective_email_batch_limit(limit, standard_default=100, standard_max=100)
     run_id = getattr(request.state, "request_id", None)
 
     payload = {

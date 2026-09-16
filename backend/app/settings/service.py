@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.core.encryption import decrypt_secret, encrypt_secret
+from app.core.config import get_settings
 from app.db.models import DecisionSettings, EmailSettings, ExportSettings, FTPSettings, LLMSettings, ScoringSettings, User
 
 
@@ -66,6 +67,17 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
             setattr(instance, key, float(value or 0))
         else:
             setattr(instance, key, value)
+    if get_settings().is_free_pilot:
+        if hasattr(instance, "smtp_enabled"):
+            instance.smtp_enabled = False
+        if hasattr(instance, "auto_sync_enabled"):
+            instance.auto_sync_enabled = False
+        if hasattr(instance, "mark_as_read_after_import"):
+            instance.mark_as_read_after_import = False
+        if hasattr(instance, "auto_forwarding_enabled"):
+            instance.auto_forwarding_enabled = False
+        if hasattr(instance, "simulation_mode"):
+            instance.simulation_mode = True
 
 
 def resolve_updated_by_id(db: Session, user) -> int | None:

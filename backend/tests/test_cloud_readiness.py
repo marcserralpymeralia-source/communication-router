@@ -10,6 +10,11 @@ from cryptography.fernet import Fernet
 
 from app.core.attachment_storage import validate_storage_configuration
 from app.core.config import Settings
+from app.core.config import effective_email_batch_limit
+from app.db.models import EmailSettings, LLMSettings
+from app.routing.policy import RoutingPolicy
+from app.settings.service import update_with_form
+from app.core import lifespan as lifespan_module
 def staging_env(**overrides: str) -> dict[str, str]:
     values = {
         "APP_ENV": "staging",
@@ -61,6 +66,47 @@ class CloudReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "STORAGE_BACKEND must be s3"):
                 Settings(_env_file=None)
 
+    def test_free_pilot_requires_staging_and_internal_worker(self):
+        with patch.dict(os.environ, staging_env(DEPLOYMENT_MODE="free_pilot", PILOT_FREE_MODE="true", RUN_WORKERS_IN_WEB="true"), clear=True):
+            settings = Settings(_env_file=None)
+        self.assertTrue(settings.pilot_free_mode)
+        self.assertEqual(settings.deployment_mode, "free_pilot")
+        self.assertTrue(settings.run_workers_in_web)
+        self.assertEqual(settings.pilot_batch_default, 10)
+        self.assertEqual(settings.pilot_batch_max, 20)
+
+        with patch.dict(os.environ, staging_env(DEPLOYMENT_MODE="free_pilot", PILOT_FREE_MODE="true", RUN_WORKERS_IN_WEB="false"), clear=True):
+            with self.assertRaisesRegex(ValueError, "RUN_WORKERS_IN_WEB"):
+                Settings(_env_file=None)
+
+        with patch.dict(os.environ, {"APP_ENV": "production", "PILOT_FREE_MODE": "true"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "PILOT_FREE_MODE requires APP_ENV=staging"):
+                Settings(_env_file=None)
+
+    def test_free_pilot_policy_and_settings_force_safe_flags(self):
+        llm = LLMSettings(company_id=1, auto_forwarding_enabled=True, simulation_mode=False, routing_review_threshold=0.75, routing_auto_threshold=0.9)
+        with patch("app.routing.policy.get_settings", return_value=SimpleNamespace(is_free_pilot=True)):
+            policy = RoutingPolicy.from_settings(llm)
+            fallback_policy = RoutingPolicy.from_settings(None)
+        self.assertFalse(policy.auto_forwarding_enabled)
+        self.assertTrue(policy.simulation_mode)
+        self.assertFalse(fallback_policy.auto_forwarding_enabled)
+        self.assertTrue(fallback_policy.simulation_mode)
+
+        email = EmailSettings(company_id=1, smtp_enabled=True, auto_sync_enabled=True, mark_as_read_after_import=True)
+        with patch("app.settings.service.get_settings", return_value=SimpleNamespace(is_free_pilot=True)):
+            update_with_form(email, {"smtp_enabled": "on", "auto_sync_enabled": "on", "mark_as_read_after_import": "on"})
+        self.assertFalse(email.smtp_enabled)
+        self.assertFalse(email.auto_sync_enabled)
+        self.assertFalse(email.mark_as_read_after_import)
+
+    def test_free_pilot_batch_limit_defaults_to_ten_and_caps_at_twenty(self):
+        settings = SimpleNamespace(is_free_pilot=True, pilot_batch_default=10, pilot_batch_max=20)
+        with patch("app.core.config.get_settings", return_value=settings):
+            self.assertEqual(effective_email_batch_limit(None, standard_default=100, standard_max=100), 10)
+            self.assertEqual(effective_email_batch_limit(99, standard_default=100, standard_max=100), 20)
+            self.assertEqual(effective_email_batch_limit(7, standard_default=100, standard_max=100), 7)
+
     def test_storage_validation_is_configuration_only(self):
         settings = SimpleNamespace(
             storage_backend="s3",
@@ -79,6 +125,27 @@ class DeploymentContractTests(unittest.TestCase):
         dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("${PORT:-8000}", dockerfile)
         self.assertIn("python -m app.workers.jobs_worker", (root / "Procfile").read_text(encoding="utf-8"))
+
+
+class FreePilotLifespanTests(unittest.IsolatedAsyncioTestCase):
+    async def test_free_pilot_starts_jobs_only_and_skips_continuous_email_listener(self):
+        master_db = SimpleNamespace(
+            scalars=lambda _statement: SimpleNamespace(all=lambda: []),
+            close=lambda: None,
+        )
+        settings = SimpleNamespace(
+            app_slug="kibak",
+            pilot_free_mode=True,
+            run_workers_in_web=True,
+            environment="staging",
+            release_sha="test-release",
+            enable_legacy_sync=False,
+        )
+        with patch.object(lifespan_module, "get_settings", return_value=settings), patch.object(lifespan_module, "init_master_db"), patch.object(lifespan_module, "MasterSessionLocal", return_value=master_db), patch.object(lifespan_module, "start_email_sync_worker") as email_worker, patch.object(lifespan_module, "start_job_worker") as job_worker:
+            async with lifespan_module.app_lifespan(SimpleNamespace()):
+                pass
+        email_worker.assert_not_called()
+        job_worker.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
+from app.core.config import effective_email_batch_limit, get_settings
 from app.core.templating import templates
 from app.db.models import Email, InboundMessage, Mailbox
 from app.jobs.service import enqueue_job
@@ -402,6 +403,8 @@ def test_mailbox_smtp(
 ):
     if not _can_test(user):
         return _response(request, {"ok": False, "message": "No tienes permisos para probar buzones."}, status_code=403)
+    if get_settings().is_free_pilot:
+        return _response(request, {"ok": False, "message": "SMTP está desactivado en el piloto gratuito."}, status_code=409)
     mailbox = get_mailbox(db, user.company_id, mailbox_id)
     if not mailbox:
         return _response(request, {"ok": False, "message": "No se encontró el buzón solicitado."}, status_code=404)
@@ -426,7 +429,8 @@ def sync_mailbox(
     mailbox = get_mailbox(db, user.company_id, mailbox_id)
     if not mailbox:
         return _response(request, {"ok": False, "message": "No se encontró el buzón solicitado."}, status_code=404)
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"mailbox_id": mailbox.id, "auto_process": False, "unread_only": mailbox.read_unread_only, "limit": mailbox.read_limit}, created_by_user_id=user.id)
+    limit = effective_email_batch_limit(mailbox.read_limit, standard_default=10, standard_max=50)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"mailbox_id": mailbox.id, "auto_process": False, "unread_only": mailbox.read_unread_only, "limit": limit}, created_by_user_id=user.id)
     return _response(request, {"ok": True, "job_id": job.id, "status": job.status, "mailbox_id": mailbox.id})
 
 
@@ -444,7 +448,7 @@ async def backfill_mailbox(
         return _response(request, {"ok": False, "message": "No se encontró el buzón solicitado."}, status_code=404)
     data = await _form_data(request)
     try:
-        requested_limit = max(min(int(data.get("limit") or 100), 100), 1)
+        requested_limit = effective_email_batch_limit(data.get("limit"), standard_default=100, standard_max=100)
     except (TypeError, ValueError):
         return _response(request, {"ok": False, "message": "El límite de backfill no es válido."}, status_code=400)
     payload = {

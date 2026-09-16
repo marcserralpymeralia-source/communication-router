@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEV_SECRET_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"kibak-local-development-key").digest()).decode()
 ALLOWED_ENVIRONMENTS = {"development", "demo", "test", "staging", "production"}
+DEPLOYMENT_MODES = {"standard", "free_pilot"}
 LOCAL_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
 LOCAL_CORS_ORIGINS = [
     "http://localhost:8000",
@@ -159,6 +160,8 @@ class Settings(BaseSettings):
     cors_allowed_origins_raw: str | None = Field(default=None, validation_alias="CORS_ALLOWED_ORIGINS")
     allowed_hosts_raw: str | None = Field(default=None, validation_alias="ALLOWED_HOSTS")
     environment: str = Field(default="development", validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"))
+    deployment_mode: str = Field(default="standard", validation_alias="DEPLOYMENT_MODE")
+    pilot_free_mode: bool = Field(default=False, validation_alias="PILOT_FREE_MODE")
     debug: bool | None = Field(default=None, validation_alias="DEBUG")
     default_company_name: str = "KIBAK Test"
     default_admin_email: str = "admin@kibak.local"
@@ -200,6 +203,15 @@ class Settings(BaseSettings):
         # route surface; development and deployed KIBAK remain isolated by default.
         if self.environment == "test":
             self.kibak_isolated_routes = False
+        self.deployment_mode = (self.deployment_mode or "standard").strip().lower()
+        if self.deployment_mode not in DEPLOYMENT_MODES:
+            raise ValueError("DEPLOYMENT_MODE must be standard or free_pilot")
+        if self.pilot_free_mode:
+            self.deployment_mode = "free_pilot"
+        elif self.deployment_mode == "free_pilot":
+            self.pilot_free_mode = True
+        if self.pilot_free_mode and self.environment != "staging":
+            raise ValueError("PILOT_FREE_MODE requires APP_ENV=staging")
         self.tenant_db_mode = (self.tenant_db_mode or "sqlite").strip().lower()
         if self.tenant_db_mode not in {"sqlite", "external"}:
             raise ValueError("TENANT_DB_MODE must be sqlite or external")
@@ -265,8 +277,10 @@ class Settings(BaseSettings):
         if self.storage_backend not in {"local", "s3"}:
             raise ValueError("STORAGE_BACKEND must be local or s3")
         self.s3_prefix = (self.s3_prefix or "kibak").strip().strip("/") or "kibak"
+        if self.pilot_free_mode and self.run_workers_in_web is False:
+            raise ValueError("RUN_WORKERS_IN_WEB must be enabled in free_pilot")
         if self.run_workers_in_web is None:
-            self.run_workers_in_web = self.environment in {"development", "demo", "test"} and not running_on_vercel
+            self.run_workers_in_web = True if self.pilot_free_mode else self.environment in {"development", "demo", "test"} and not running_on_vercel
         if self.auth_throttling_enabled is None:
             self.auth_throttling_enabled = self.environment in {"staging", "production"}
         if self.environment == "production" and self.performance_profiling_enabled:
@@ -340,6 +354,9 @@ class Settings(BaseSettings):
                 raise ValueError("STORAGE_BACKEND must be s3 in staging")
             if not self.auth_throttling_enabled:
                 raise ValueError("AUTH_THROTTLING_ENABLED must be enabled in staging")
+        if self.pilot_free_mode:
+            if not self.run_workers_in_web:
+                raise ValueError("RUN_WORKERS_IN_WEB must be enabled in free_pilot")
         if self.environment == "production" and not self.auth_throttling_enabled:
             raise ValueError("AUTH_THROTTLING_ENABLED must be enabled in production")
 
@@ -366,6 +383,22 @@ class Settings(BaseSettings):
     @property
     def trusted_proxy_ips(self) -> list[str]:
         return _split_csv(self.trusted_proxy_ips_raw)
+
+    @property
+    def is_free_pilot(self) -> bool:
+        return self.deployment_mode == "free_pilot"
+
+    @property
+    def pilot_batch_default(self) -> int:
+        return 10 if self.is_free_pilot else 25
+
+    @property
+    def pilot_batch_max(self) -> int:
+        return 20 if self.is_free_pilot else 100
+
+    @property
+    def worker_max_jobs_per_cycle(self) -> int | None:
+        return 1 if self.is_free_pilot else None
 
     @property
     def encryption_key(self) -> str:
@@ -452,3 +485,15 @@ def get_settings() -> Settings:
     if "APP_ENV" not in os.environ and "ENVIRONMENT" not in os.environ:
         logger.warning("APP_ENV no definido; usando development por compatibilidad local.")
     return Settings()
+
+
+def effective_email_batch_limit(value: int | str | None, *, standard_default: int, standard_max: int) -> int:
+    """Clamp an email operation to the active deployment mode budget."""
+    settings = get_settings()
+    default = settings.pilot_batch_default if settings.is_free_pilot else standard_default
+    maximum = settings.pilot_batch_max if settings.is_free_pilot else standard_max
+    try:
+        requested = int(value or default)
+    except (TypeError, ValueError):
+        requested = default
+    return max(min(requested, maximum), 1)

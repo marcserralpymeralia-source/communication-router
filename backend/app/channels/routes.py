@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
 from app.core.attachment_storage import read_attachment
+from app.core.config import effective_email_batch_limit
 from app.master.service import TenantUser
 from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, MessageAttachment, Order
 from app.jobs.service import enqueue_job, execute_job_inline
@@ -281,7 +282,7 @@ def process_entry(entry_id: str, db: Session = Depends(get_tenant_db), user: Ten
 @entries_router.post("/entries/sync")
 def sync_entries(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
+    safe_limit = effective_email_batch_limit(settings.read_limit, standard_default=10, standard_max=50)
     job = enqueue_job(
         db,
         company_id=user.company_id,

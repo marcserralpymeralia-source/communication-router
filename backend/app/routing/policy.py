@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent.prompt_runtime import ROUTING_PROMPT_PURPOSE
+from app.core.config import get_settings
 from app.core.encryption import decrypt_secret
 from app.db.models import (
     Department,
@@ -39,12 +40,16 @@ class RoutingPolicy:
 
     @classmethod
     def from_settings(cls, settings: LLMSettings | None) -> "RoutingPolicy":
+        free_pilot = get_settings().is_free_pilot
         if settings is None:
-            return cls().validate()
+            return cls(
+                auto_forwarding_enabled=False,
+                simulation_mode=free_pilot,
+            ).validate()
         return cls(
             auto_routing_enabled=bool(settings.auto_routing_enabled),
-            auto_forwarding_enabled=bool(settings.auto_forwarding_enabled),
-            simulation_mode=bool(getattr(settings, "simulation_mode", False)),
+            auto_forwarding_enabled=False if free_pilot else bool(settings.auto_forwarding_enabled),
+            simulation_mode=True if free_pilot else bool(getattr(settings, "simulation_mode", False)),
             review_threshold=float(getattr(settings, "routing_review_threshold", DEFAULT_ROUTING_THRESHOLDS.review_confidence)),
             auto_threshold=float(getattr(settings, "routing_auto_threshold", DEFAULT_ROUTING_THRESHOLDS.auto_route_confidence)),
         ).validate()
@@ -171,10 +176,11 @@ def parse_policy_form(data: dict[str, Any], current: RoutingPolicy) -> RoutingPo
         except (TypeError, ValueError) as exc:
             raise RoutingPolicyError(f"{name} debe ser un número entre 0 y 1.") from exc
 
+    free_pilot = get_settings().is_free_pilot
     return RoutingPolicy(
         auto_routing_enabled=flag("auto_routing_enabled"),
-        auto_forwarding_enabled=flag("auto_forwarding_enabled"),
-        simulation_mode=flag("simulation_mode"),
+        auto_forwarding_enabled=False if free_pilot else flag("auto_forwarding_enabled"),
+        simulation_mode=True if free_pilot else flag("simulation_mode"),
         review_threshold=number("routing_review_threshold", current.review_threshold),
         auto_threshold=number("routing_auto_threshold", current.auto_threshold),
     ).validate()

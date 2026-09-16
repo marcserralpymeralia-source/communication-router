@@ -10,6 +10,11 @@ Crear dos servicios desde el mismo repositorio, rama/tag y commit:
 - `kibak-pilot-web`: Web Service, runtime Docker.
 - `kibak-pilot-worker`: Background Worker, runtime Docker.
 
+Para el perfil gratuito controlado, crear solo el Web Service y usar
+`deploy/render/free-pilot.env.example`; ese perfil ejecuta únicamente el worker
+de jobs interno y no inicia polling IMAP continuo. El perfil estándar de dos
+servicios se mantiene sin cambios.
+
 Para el web usar el comando Docker:
 
 ```text

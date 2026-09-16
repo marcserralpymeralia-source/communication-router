@@ -54,14 +54,14 @@
             <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/test">
               <button class="secondary compact-button" data-loading-text="Probando...">Probar conexión</button>
             </form>
-            <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/smtp-test">
+            {% if not app_settings.pilot_free_mode %}<form method="post" action="/settings/mailboxes/{{ mailbox.id }}/smtp-test">
               <button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button>
-            </form>
+            </form>{% endif %}
             <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/sync">
-              <button class="secondary compact-button" data-loading-text="Encolando...">Sincronizar</button>
+              <button class="secondary compact-button" data-loading-text="Encolando...">{{ "Procesar correos ahora" if app_settings.pilot_free_mode else "Sincronizar" }}</button>
             </form>
             <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/backfill">
-              <input type="hidden" name="limit" value="100">
+              <input type="hidden" name="limit" value="{{ 10 if app_settings.pilot_free_mode else 100 }}">
               <button class="secondary compact-button" data-loading-text="Encolando...">Backfill</button>
             </form>
           {% endif %}

@@ -64,6 +64,9 @@ async def app_lifespan(app: FastAPI):
     if running_on_vercel or not master_db_ready or not settings.run_workers_in_web:
         logger.info("Workers disabled in web process runtime=%s release=%s", settings.environment, settings.release_sha)
     else:
-        start_email_sync_worker()
+        if settings.pilot_free_mode:
+            logger.info("Free pilot: continuous email polling disabled; manual processing remains available")
+        else:
+            start_email_sync_worker()
         start_job_worker()
     yield

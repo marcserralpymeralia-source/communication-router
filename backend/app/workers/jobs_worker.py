@@ -995,7 +995,7 @@ def _worker_loop() -> None:
     logger.info("Job worker started release=%s environment=%s", settings.release_sha, settings.environment)
     while not _shutdown_event.is_set():
         try:
-            run_worker_cycle()
+            run_worker_cycle(max_jobs=settings.worker_max_jobs_per_cycle)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Job worker error: %s", exc)
         _shutdown_event.wait(poll_seconds)

@@ -24,7 +24,7 @@ from app.agent.model_catalog import completion_token_parameter, supports_custom_
 from app.agent.prompt_runtime import run_prompt_execution
 from app.communications.service import add_communication_attachment, create_or_update_communication_from_email, mark_communication_processed
 from app.routing.auto import enqueue_automatic_routing
-from app.core.config import get_settings
+from app.core.config import effective_email_batch_limit, get_settings
 from app.core.encryption import decrypt_secret
 from app.db.models import Communication, Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
 from app.master.models import EmailSyncState, MailboxSyncState
@@ -241,11 +241,13 @@ def _parse_imap_date(value: str | None) -> date | None:
 
 
 def _clamp_initial_history_limit(value: int | str | None) -> int:
+    maximum = min(IMAP_INITIAL_HISTORY_MAX, get_settings().pilot_batch_max)
+    default = get_settings().pilot_batch_default if get_settings().is_free_pilot else 50
     try:
-        parsed = int(value or 50)
+        parsed = int(value or default)
     except (TypeError, ValueError):
-        parsed = 50
-    return max(1, min(parsed, IMAP_INITIAL_HISTORY_MAX))
+        parsed = default
+    return max(1, min(parsed, maximum))
 
 
 def _normalize_initial_history_mode(value: str | None) -> str:
@@ -274,6 +276,8 @@ def _initial_history_plan(settings: EmailSettings) -> dict:
         limit = IMAP_INITIAL_HISTORY_MAX
     elif mode == "custom" and not from_date:
         raise ValueError("Indica una fecha valida para el historial inicial (AAAA-MM-DD).")
+    if get_settings().is_free_pilot:
+        limit = min(limit, get_settings().pilot_batch_max)
     return {
         "mode": mode,
         "limit": limit,
@@ -823,12 +827,12 @@ def _fetch_imap_emails(
             return {"ok": False, "found": 0, "saved": 0, "downloaded": 0, "duplicates": 0, "discarded": 0, "errors": 0, "message": "No se pudieron listar correos."}
         if start_date or end_date:
             ids = sorted(ids, key=lambda raw: int(raw.decode(errors="ignore") or 0))
-        if limit:
-            limit = max(int(limit), 1)
-            limit = min(limit, IMAP_MAX_MESSAGES_PER_RUN)
+        if limit is not None or get_settings().is_free_pilot:
+            limit = effective_email_batch_limit(limit, standard_default=IMAP_RECENT_MESSAGES_LIMIT, standard_max=IMAP_MAX_MESSAGES_PER_RUN)
             ids = ids[:limit] if (start_date or end_date) else ids[-limit:]
         found = len(ids)
-        batch_size = max(min(int(batch_size or settings.read_limit or 10), IMAP_MAX_MESSAGES_PER_RUN), 1)
+        configured_batch = batch_size if batch_size is not None else (get_settings().pilot_batch_default if get_settings().is_free_pilot else settings.read_limit or 10)
+        batch_size = effective_email_batch_limit(configured_batch, standard_default=10, standard_max=IMAP_MAX_MESSAGES_PER_RUN)
         saved_email_ids: list[int] = []
         processed_communication_ids: list[int] = []
         checkpoint_uid = sync_state.last_checkpoint_uid if sync_state and sync_state.backfill_status == "paused" else None
@@ -1275,7 +1279,7 @@ def read_latest_imap_emails(
         settings,
         company_id,
         unread_only=False if unread_only is None else unread_only,
-        limit=min(max(int(effective_limit or IMAP_RECENT_MESSAGES_LIMIT), 1), IMAP_MAX_MESSAGES_PER_RUN),
+        limit=effective_email_batch_limit(effective_limit, standard_default=IMAP_RECENT_MESSAGES_LIMIT, standard_max=IMAP_MAX_MESSAGES_PER_RUN),
         auto_process=auto_process,
         label="Lectura IMAP",
         sync_state=sync_state,
@@ -1320,7 +1324,7 @@ def backfill_imap_emails(
         start_uid=from_uid,
         end_uid=to_uid,
         unread_only=False,
-        limit=limit,
+        limit=effective_email_batch_limit(limit, standard_default=IMAP_RECENT_MESSAGES_LIMIT, standard_max=IMAP_MAX_MESSAGES_PER_RUN),
         auto_process=False,
         label=f"Backfill IMAP desde {start_date.strftime('%d/%m/%Y')}{' hasta ' + end_date.strftime('%d/%m/%Y') if end_date else ''}",
         sync_state=sync_state,
