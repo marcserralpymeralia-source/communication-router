@@ -24,7 +24,10 @@ def _connect_args(database_url: str) -> dict[str, object]:
 @lru_cache(maxsize=128)
 def get_tenant_engine(database_url: str):
     resolved_url = resolve_tenant_database_url(database_url)
-    return create_engine(resolved_url, connect_args=_connect_args(resolved_url), pool_pre_ping=True)
+    engine_options = {"connect_args": _connect_args(resolved_url), "pool_pre_ping": True}
+    if get_settings().is_vercel_pilot:
+        engine_options.update(pool_size=1, max_overflow=0, pool_timeout=30, pool_recycle=300)
+    return create_engine(resolved_url, **engine_options)
 
 
 def tenant_db_session(database_url: str):

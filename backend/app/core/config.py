@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEV_SECRET_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"kibak-local-development-key").digest()).decode()
 ALLOWED_ENVIRONMENTS = {"development", "demo", "test", "staging", "production"}
-DEPLOYMENT_MODES = {"standard", "free_pilot"}
+DEPLOYMENT_MODES = {"standard", "free_pilot", "vercel_pilot"}
 LOCAL_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
 LOCAL_CORS_ORIGINS = [
     "http://localhost:8000",
@@ -205,12 +205,14 @@ class Settings(BaseSettings):
             self.kibak_isolated_routes = False
         self.deployment_mode = (self.deployment_mode or "standard").strip().lower()
         if self.deployment_mode not in DEPLOYMENT_MODES:
-            raise ValueError("DEPLOYMENT_MODE must be standard or free_pilot")
+            raise ValueError("DEPLOYMENT_MODE must be standard, free_pilot or vercel_pilot")
+        if self.deployment_mode == "vercel_pilot" and self.pilot_free_mode:
+            raise ValueError("PILOT_FREE_MODE cannot be combined with DEPLOYMENT_MODE=vercel_pilot")
         if self.pilot_free_mode:
             self.deployment_mode = "free_pilot"
         elif self.deployment_mode == "free_pilot":
             self.pilot_free_mode = True
-        if self.pilot_free_mode and self.environment != "staging":
+        if (self.pilot_free_mode or self.deployment_mode == "vercel_pilot") and self.environment != "staging":
             raise ValueError("PILOT_FREE_MODE requires APP_ENV=staging")
         self.tenant_db_mode = (self.tenant_db_mode or "sqlite").strip().lower()
         if self.tenant_db_mode not in {"sqlite", "external"}:
@@ -281,6 +283,10 @@ class Settings(BaseSettings):
             raise ValueError("RUN_WORKERS_IN_WEB must be enabled in free_pilot")
         if self.run_workers_in_web is None:
             self.run_workers_in_web = True if self.pilot_free_mode else self.environment in {"development", "demo", "test"} and not running_on_vercel
+        if self.deployment_mode == "vercel_pilot":
+            if self.run_workers_in_web:
+                raise ValueError("RUN_WORKERS_IN_WEB must be disabled in vercel_pilot")
+            self.run_workers_in_web = False
         if self.auth_throttling_enabled is None:
             self.auth_throttling_enabled = self.environment in {"staging", "production"}
         if self.environment == "production" and self.performance_profiling_enabled:
@@ -389,16 +395,24 @@ class Settings(BaseSettings):
         return self.deployment_mode == "free_pilot"
 
     @property
+    def is_vercel_pilot(self) -> bool:
+        return self.deployment_mode == "vercel_pilot"
+
+    @property
+    def is_pilot_runtime(self) -> bool:
+        return self.deployment_mode in {"free_pilot", "vercel_pilot"}
+
+    @property
     def pilot_batch_default(self) -> int:
-        return 10 if self.is_free_pilot else 25
+        return 10 if self.is_pilot_runtime else 25
 
     @property
     def pilot_batch_max(self) -> int:
-        return 20 if self.is_free_pilot else 100
+        return 20 if self.is_pilot_runtime else 100
 
     @property
     def worker_max_jobs_per_cycle(self) -> int | None:
-        return 1 if self.is_free_pilot else None
+        return 1 if self.is_pilot_runtime else None
 
     @property
     def encryption_key(self) -> str:
@@ -490,8 +504,8 @@ def get_settings() -> Settings:
 def effective_email_batch_limit(value: int | str | None, *, standard_default: int, standard_max: int) -> int:
     """Clamp an email operation to the active deployment mode budget."""
     settings = get_settings()
-    default = settings.pilot_batch_default if settings.is_free_pilot else standard_default
-    maximum = settings.pilot_batch_max if settings.is_free_pilot else standard_max
+    default = settings.pilot_batch_default if settings.is_pilot_runtime else standard_default
+    maximum = settings.pilot_batch_max if settings.is_pilot_runtime else standard_max
     try:
         requested = int(value or default)
     except (TypeError, ValueError):

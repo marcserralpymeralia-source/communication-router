@@ -403,7 +403,7 @@ def test_mailbox_smtp(
 ):
     if not _can_test(user):
         return _response(request, {"ok": False, "message": "No tienes permisos para probar buzones."}, status_code=403)
-    if get_settings().is_free_pilot:
+    if get_settings().is_pilot_runtime:
         return _response(request, {"ok": False, "message": "SMTP está desactivado en el piloto gratuito."}, status_code=409)
     mailbox = get_mailbox(db, user.company_id, mailbox_id)
     if not mailbox:

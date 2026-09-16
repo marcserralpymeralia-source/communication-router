@@ -87,7 +87,7 @@
 
           <div class="topbar-context-badge">
             <span class="topbar-company-name" title="{{ request.state.branding.company_name }}">{{ request.state.branding.company_name }}</span>
-            {% if app_settings.pilot_free_mode %}
+            {% if app_settings.is_pilot_runtime %}
               <span class="topbar-env-tag">Entorno piloto</span>
             {% elif app_settings.environment != "production" and "demo" not in ((request.state.branding.company_name or "")|lower) %}
               <span class="topbar-env-tag">Demo</span>
@@ -109,7 +109,7 @@
           </div>
         </div>
       </header>
-      {% if app_settings.pilot_free_mode and user and user.role and user.role.name == "Administrador" %}
+      {% if app_settings.is_pilot_runtime and user and user.role and user.role.name == "Administrador" %}
         <p class="pilot-runtime-note">El procesamiento automático continuo no está activo en este entorno.</p>
       {% endif %}
       {% block content %}{% endblock %}

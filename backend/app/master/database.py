@@ -8,7 +8,10 @@ from app.core.config import get_settings
 
 settings = get_settings()
 connect_args = {"check_same_thread": False} if settings.master_database_url.startswith("sqlite") else {}
-engine = create_engine(settings.master_database_url, connect_args=connect_args, pool_pre_ping=True)
+engine_options = {"connect_args": connect_args, "pool_pre_ping": True}
+if settings.is_vercel_pilot:
+    engine_options.update(pool_size=1, max_overflow=0, pool_timeout=30, pool_recycle=300)
+engine = create_engine(settings.master_database_url, **engine_options)
 MasterSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

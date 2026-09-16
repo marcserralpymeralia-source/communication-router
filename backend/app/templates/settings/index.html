@@ -542,7 +542,7 @@
         <div class="form-grid">
           <label>Sincronización automática<input name="auto_sync_enabled" type="checkbox" {% if email.auto_sync_enabled %}checked{% endif %}></label>
           <label>Leer solo correos no leídos<input name="read_unread_only" type="checkbox" {% if email.read_unread_only %}checked{% endif %}></label>
-          <label>Máximo por sincronización<input name="read_limit" type="number" min="1" max="{{ 20 if app_settings.pilot_free_mode else 250 }}" value="{{ email.read_limit if not app_settings.pilot_free_mode or email.read_limit <= 20 else 20 }}"></label>
+          <label>Máximo por sincronización<input name="read_limit" type="number" min="1" max="{{ 20 if app_settings.is_pilot_runtime else 250 }}" value="{{ email.read_limit if not app_settings.is_pilot_runtime or email.read_limit <= 20 else 20 }}"></label>
           <label>Frecuencia de sincronización
             <select name="polling_frequency_minutes">
               {% set polling_value = email.polling_frequency_minutes if email.polling_frequency_minutes in [5, 10, 15, 30, 60] else 5 %}
@@ -681,7 +681,7 @@
           <button data-loading-text="Guardando...">Guardar envío</button>
           {% if can_test_email %}
             <input name="to_email" type="email" placeholder="prueba@cliente.com" required>
-            {% if not app_settings.pilot_free_mode %}<button class="secondary js-loading-form" formaction="/settings/email/smtp/send-test" formmethod="post" data-loading-text="Enviando...">Enviar prueba</button>{% endif %}
+            {% if not app_settings.is_pilot_runtime %}<button class="secondary js-loading-form" formaction="/settings/email/smtp/send-test" formmethod="post" data-loading-text="Enviando...">Enviar prueba</button>{% endif %}
           {% endif %}
         </div>
         {% if not can_edit_email %}</fieldset>{% endif %}
@@ -708,8 +708,8 @@
       <div class="drawer-actions">
         <a class="button secondary compact-button" href="/">Ver bandeja de entrada</a>
         {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/imap/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar IMAP</button></form>{% endif %}
-        {% if can_test_email and not app_settings.pilot_free_mode %}<form class="js-loading-form" method="post" action="/settings/email/smtp/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button></form>{% endif %}
-        <form class="js-loading-form" method="post" action="/settings/email/read-unprocessed"><button class="secondary compact-button" data-loading-text="Procesando...">{{ "Procesar correos ahora" if app_settings.pilot_free_mode else "Sincronizar ahora" }}</button></form>
+        {% if can_test_email and not app_settings.is_pilot_runtime %}<form class="js-loading-form" method="post" action="/settings/email/smtp/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button></form>{% endif %}
+        <form class="js-loading-form" method="post" action="/settings/email/read-unprocessed"><button class="secondary compact-button" data-loading-text="Procesando...">{{ "Procesar correos ahora" if app_settings.is_pilot_runtime else "Sincronizar ahora" }}</button></form>
       </div>
       {% if email_status.last_imap_test.message %}
         <p class="muted settings-status-note">Última prueba IMAP: {{ email_status.last_imap_test.message }}</p>

@@ -242,7 +242,7 @@ def _parse_imap_date(value: str | None) -> date | None:
 
 def _clamp_initial_history_limit(value: int | str | None) -> int:
     maximum = min(IMAP_INITIAL_HISTORY_MAX, get_settings().pilot_batch_max)
-    default = get_settings().pilot_batch_default if get_settings().is_free_pilot else 50
+    default = get_settings().pilot_batch_default if get_settings().is_pilot_runtime else 50
     try:
         parsed = int(value or default)
     except (TypeError, ValueError):
@@ -276,7 +276,7 @@ def _initial_history_plan(settings: EmailSettings) -> dict:
         limit = IMAP_INITIAL_HISTORY_MAX
     elif mode == "custom" and not from_date:
         raise ValueError("Indica una fecha valida para el historial inicial (AAAA-MM-DD).")
-    if get_settings().is_free_pilot:
+    if get_settings().is_pilot_runtime:
         limit = min(limit, get_settings().pilot_batch_max)
     return {
         "mode": mode,
@@ -827,11 +827,11 @@ def _fetch_imap_emails(
             return {"ok": False, "found": 0, "saved": 0, "downloaded": 0, "duplicates": 0, "discarded": 0, "errors": 0, "message": "No se pudieron listar correos."}
         if start_date or end_date:
             ids = sorted(ids, key=lambda raw: int(raw.decode(errors="ignore") or 0))
-        if limit is not None or get_settings().is_free_pilot:
+        if limit is not None or get_settings().is_pilot_runtime:
             limit = effective_email_batch_limit(limit, standard_default=IMAP_RECENT_MESSAGES_LIMIT, standard_max=IMAP_MAX_MESSAGES_PER_RUN)
             ids = ids[:limit] if (start_date or end_date) else ids[-limit:]
         found = len(ids)
-        configured_batch = batch_size if batch_size is not None else (get_settings().pilot_batch_default if get_settings().is_free_pilot else settings.read_limit or 10)
+        configured_batch = batch_size if batch_size is not None else (get_settings().pilot_batch_default if get_settings().is_pilot_runtime else settings.read_limit or 10)
         batch_size = effective_email_batch_limit(configured_batch, standard_default=10, standard_max=IMAP_MAX_MESSAGES_PER_RUN)
         saved_email_ids: list[int] = []
         processed_communication_ids: list[int] = []

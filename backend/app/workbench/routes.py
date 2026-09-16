@@ -18,6 +18,7 @@ from app.core.attachment_storage import read_attachment
 from app.core.channel_identity import channel_label, inbound_channel_key, is_whatsapp_provider
 from app.core.entry_workflow import close_email, discard_email, mark_email_no_order, queue_email_processing
 from app.core.templating import templates
+from app.core.config import get_settings
 from app.core.timezones import format_local_datetime
 from app.dashboard.service import workbench_summary
 from app.db.models import Alert, Conversation, Email, EmailAttachment, EmailSettings, ExportFile, FTPSettings, InboundMessage, Order, ScoringSettings, utcnow
@@ -41,7 +42,7 @@ def _redirect_back(request: Request, fallback: str = "/"):
 
 
 def _run_job_inline_if_needed(request: Request, db: Session, user: TenantUser, job, *, action: str, message: str, fallback: str = "/") -> dict | None:  # noqa: ANN001
-    if os.getenv("VERCEL") != "1" and is_job_worker_started():
+    if not get_settings().is_vercel_pilot and os.getenv("VERCEL") != "1" and is_job_worker_started():
         return None
     request_id = getattr(request.state, "request_id", None)
     logger.info(

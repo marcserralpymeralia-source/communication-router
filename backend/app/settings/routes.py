@@ -1273,7 +1273,7 @@ def test_email_imap(request: Request, db: Session = Depends(get_tenant_db), user
 def test_email_smtp(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_test_email_settings(user):
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
-    if get_settings().is_free_pilot:
+    if get_settings().is_pilot_runtime:
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     result = test_smtp_connection(settings)
@@ -1289,7 +1289,7 @@ def test_email_smtp(db: Session = Depends(get_tenant_db), user: TenantUser = Dep
 def send_email_test(to_email: str = Form(...), subject: str = Form("Prueba SMTP"), message: str = Form("Correo de prueba enviado desde Anchi."), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_test_email_settings(user):
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
-    if get_settings().is_free_pilot:
+    if get_settings().is_pilot_runtime:
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     result = send_test_email(settings, to_email, subject, message)

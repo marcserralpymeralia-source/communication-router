@@ -85,7 +85,7 @@ class CloudReadinessTests(unittest.TestCase):
 
     def test_free_pilot_policy_and_settings_force_safe_flags(self):
         llm = LLMSettings(company_id=1, auto_forwarding_enabled=True, simulation_mode=False, routing_review_threshold=0.75, routing_auto_threshold=0.9)
-        with patch("app.routing.policy.get_settings", return_value=SimpleNamespace(is_free_pilot=True)):
+        with patch("app.routing.policy.get_settings", return_value=SimpleNamespace(is_pilot_runtime=True)):
             policy = RoutingPolicy.from_settings(llm)
             fallback_policy = RoutingPolicy.from_settings(None)
         self.assertFalse(policy.auto_forwarding_enabled)
@@ -94,18 +94,45 @@ class CloudReadinessTests(unittest.TestCase):
         self.assertTrue(fallback_policy.simulation_mode)
 
         email = EmailSettings(company_id=1, smtp_enabled=True, auto_sync_enabled=True, mark_as_read_after_import=True)
-        with patch("app.settings.service.get_settings", return_value=SimpleNamespace(is_free_pilot=True)):
+        with patch("app.settings.service.get_settings", return_value=SimpleNamespace(is_pilot_runtime=True)):
             update_with_form(email, {"smtp_enabled": "on", "auto_sync_enabled": "on", "mark_as_read_after_import": "on"})
         self.assertFalse(email.smtp_enabled)
         self.assertFalse(email.auto_sync_enabled)
         self.assertFalse(email.mark_as_read_after_import)
 
     def test_free_pilot_batch_limit_defaults_to_ten_and_caps_at_twenty(self):
-        settings = SimpleNamespace(is_free_pilot=True, pilot_batch_default=10, pilot_batch_max=20)
+        settings = SimpleNamespace(is_pilot_runtime=True, pilot_batch_default=10, pilot_batch_max=20)
         with patch("app.core.config.get_settings", return_value=settings):
             self.assertEqual(effective_email_batch_limit(None, standard_default=100, standard_max=100), 10)
             self.assertEqual(effective_email_batch_limit(99, standard_default=100, standard_max=100), 20)
             self.assertEqual(effective_email_batch_limit(7, standard_default=100, standard_max=100), 7)
+
+    def test_vercel_pilot_is_staging_serverless_and_bounded(self):
+        with patch.dict(
+            os.environ,
+            staging_env(
+                DEPLOYMENT_MODE="vercel_pilot",
+                PILOT_FREE_MODE="false",
+                RUN_WORKERS_IN_WEB="false",
+            ),
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+        self.assertEqual(settings.deployment_mode, "vercel_pilot")
+        self.assertTrue(settings.is_vercel_pilot)
+        self.assertTrue(settings.is_pilot_runtime)
+        self.assertFalse(settings.pilot_free_mode)
+        self.assertFalse(settings.run_workers_in_web)
+        self.assertEqual(settings.pilot_batch_default, 10)
+        self.assertEqual(settings.pilot_batch_max, 20)
+
+        with patch.dict(
+            os.environ,
+            staging_env(DEPLOYMENT_MODE="vercel_pilot", RUN_WORKERS_IN_WEB="true"),
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "RUN_WORKERS_IN_WEB"):
+                Settings(_env_file=None)
 
     def test_storage_validation_is_configuration_only(self):
         settings = SimpleNamespace(
@@ -126,6 +153,16 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("${PORT:-8000}", dockerfile)
         self.assertIn("python -m app.workers.jobs_worker", (root / "Procfile").read_text(encoding="utf-8"))
 
+    def test_vercel_entrypoint_and_function_budget_are_explicit(self):
+        import json
+
+        root = Path(__file__).resolve().parents[2]
+        entrypoint = (root / "api" / "index.py").read_text(encoding="utf-8")
+        config = json.loads((root / "vercel.json").read_text(encoding="utf-8"))
+        self.assertIn("from app.main import app", entrypoint)
+        self.assertEqual(config["functions"]["api/index.py"]["maxDuration"], 800)
+        self.assertNotIn("crons", config)
+
 
 class FreePilotLifespanTests(unittest.IsolatedAsyncioTestCase):
     async def test_free_pilot_starts_jobs_only_and_skips_continuous_email_listener(self):
@@ -135,6 +172,7 @@ class FreePilotLifespanTests(unittest.IsolatedAsyncioTestCase):
         )
         settings = SimpleNamespace(
             app_slug="kibak",
+            is_vercel_pilot=False,
             pilot_free_mode=True,
             run_workers_in_web=True,
             environment="staging",
@@ -146,6 +184,27 @@ class FreePilotLifespanTests(unittest.IsolatedAsyncioTestCase):
                 pass
         email_worker.assert_not_called()
         job_worker.assert_called_once_with()
+
+    async def test_vercel_pilot_does_not_initialize_schema_or_start_workers(self):
+        master_db = SimpleNamespace(
+            scalars=lambda _statement: SimpleNamespace(all=lambda: []),
+            close=lambda: None,
+        )
+        settings = SimpleNamespace(
+            app_slug="kibak",
+            is_vercel_pilot=True,
+            pilot_free_mode=False,
+            run_workers_in_web=False,
+            environment="staging",
+            release_sha="test-release",
+            enable_legacy_sync=False,
+        )
+        with patch.object(lifespan_module, "get_settings", return_value=settings), patch.object(lifespan_module, "init_master_db") as init_master, patch.object(lifespan_module, "MasterSessionLocal", return_value=master_db), patch.object(lifespan_module, "start_email_sync_worker") as email_worker, patch.object(lifespan_module, "start_job_worker") as job_worker:
+            async with lifespan_module.app_lifespan(SimpleNamespace()):
+                pass
+        init_master.assert_not_called()
+        email_worker.assert_not_called()
+        job_worker.assert_not_called()
 
 
 if __name__ == "__main__":

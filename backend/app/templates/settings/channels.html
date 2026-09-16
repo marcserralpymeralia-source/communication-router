@@ -196,7 +196,7 @@
             <div class="form-grid">
               <label>Sincronización automática<input name="auto_sync_enabled" type="checkbox" {% if email.auto_sync_enabled %}checked{% endif %}></label>
               <label>Leer solo correos no leídos<input name="read_unread_only" type="checkbox" {% if email.read_unread_only %}checked{% endif %}></label>
-                <label>Máximo por sincronización<input name="read_limit" type="number" min="1" max="{{ 20 if app_settings.pilot_free_mode else 250 }}" value="{{ email.read_limit if not app_settings.pilot_free_mode or email.read_limit <= 20 else 20 }}"></label>
+                <label>Máximo por sincronización<input name="read_limit" type="number" min="1" max="{{ 20 if app_settings.is_pilot_runtime else 250 }}" value="{{ email.read_limit if not app_settings.is_pilot_runtime or email.read_limit <= 20 else 20 }}"></label>
               <label>Frecuencia de sincronización
                 <select name="polling_frequency_minutes">
                   {% set polling_value = email.polling_frequency_minutes if email.polling_frequency_minutes in [5, 10, 15, 30, 60] else 5 %}

@@ -24,7 +24,10 @@ async def app_lifespan(app: FastAPI):
     master_db = None
     master_db_ready = True
     try:
-        init_master_db()
+        # Vercel Functions use a pre-migrated database; schema creation must
+        # remain an explicit release step, never a request-start side effect.
+        if not settings.is_vercel_pilot:
+            init_master_db()
         master_db = MasterSessionLocal()
         tenants = master_db.scalars(
             select(MasterTenantDatabase).where(
@@ -61,7 +64,7 @@ async def app_lifespan(app: FastAPI):
         if master_db is not None:
             master_db.close()
     running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
-    if running_on_vercel or not master_db_ready or not settings.run_workers_in_web:
+    if settings.is_vercel_pilot or running_on_vercel or not master_db_ready or not settings.run_workers_in_web:
         logger.info("Workers disabled in web process runtime=%s release=%s", settings.environment, settings.release_sha)
     else:
         if settings.pilot_free_mode:

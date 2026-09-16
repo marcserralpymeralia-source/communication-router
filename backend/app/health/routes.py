@@ -52,6 +52,20 @@ def _storage_probe() -> dict[str, object]:
 
 
 def _worker_health(db: Session, company_id: int) -> dict[str, object]:
+    if get_settings().is_vercel_pilot:
+        pending = db.scalar(
+            select(func.count(BackgroundJob.id)).where(
+                BackgroundJob.company_id == company_id,
+                BackgroundJob.status.in_(("queued", "running", "retrying")),
+            )
+        ) or 0
+        return {
+            "required": False,
+            "status": "pass",
+            "mode": "inline",
+            "last_heartbeat_at": None,
+            "pending_jobs": pending,
+        }
     now = datetime.now(timezone.utc)
     ttl = max(int(getattr(get_settings(), "job_worker_poll_seconds", 10)) * 3, 60)
     heartbeat = db.scalar(

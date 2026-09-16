@@ -19,9 +19,10 @@ class TenantDatabaseResolutionTests(unittest.TestCase):
         get_settings.cache_clear()
 
     def test_host_url_remains_canonical_without_runtime_override(self):
-        settings = Settings(_env_file=None)
-        url = "postgresql+psycopg://kibak_local:dev@localhost:5433/kibak_tenant_pilot"
-        self.assertEqual(resolve_tenant_database_url(url, settings=settings), url)
+        with patch.dict(os.environ, {"APP_ENV": "development"}, clear=True):
+            settings = Settings(_env_file=None)
+            url = "postgresql+psycopg://kibak_local:dev@localhost:5433/kibak_tenant_pilot"
+            self.assertEqual(resolve_tenant_database_url(url, settings=settings), url)
 
     def test_docker_runtime_override_preserves_database_identity(self):
         with patch.dict(

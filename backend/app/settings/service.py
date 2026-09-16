@@ -67,7 +67,7 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
             setattr(instance, key, float(value or 0))
         else:
             setattr(instance, key, value)
-    if get_settings().is_free_pilot:
+    if get_settings().is_pilot_runtime:
         if hasattr(instance, "smtp_enabled"):
             instance.smtp_enabled = False
         if hasattr(instance, "auto_sync_enabled"):
