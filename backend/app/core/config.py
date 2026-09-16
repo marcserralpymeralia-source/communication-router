@@ -6,16 +6,17 @@ import logging
 import os
 import re
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 logger = logging.getLogger(__name__)
 
 DEV_SECRET_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"kibak-local-development-key").digest()).decode()
-ALLOWED_ENVIRONMENTS = {"development", "demo", "test", "production"}
+ALLOWED_ENVIRONMENTS = {"development", "demo", "test", "staging", "production"}
 LOCAL_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
 LOCAL_CORS_ORIGINS = [
     "http://localhost:8000",
@@ -169,6 +170,15 @@ class Settings(BaseSettings):
     branding_logo_url: str = ""
     branding_dark_logo_url: str = ""
     branding_favicon_url: str = ""
+    release_sha: str = Field(default="unknown", validation_alias="RELEASE_SHA")
+    run_workers_in_web: bool | None = Field(default=None, validation_alias="RUN_WORKERS_IN_WEB")
+    storage_backend: str = Field(default="local", validation_alias="STORAGE_BACKEND")
+    s3_endpoint_url: str | None = Field(default=None, validation_alias="S3_ENDPOINT_URL")
+    s3_bucket: str | None = Field(default=None, validation_alias="S3_BUCKET")
+    s3_region: str = Field(default="auto", validation_alias="S3_REGION")
+    s3_access_key_id: str | None = Field(default=None, validation_alias="S3_ACCESS_KEY_ID")
+    s3_secret_access_key: SecretStr | None = Field(default=None, validation_alias="S3_SECRET_ACCESS_KEY")
+    s3_prefix: str = Field(default="kibak", validation_alias="S3_PREFIX")
     email_signature_text: str = "Equipo KIBAK"
     log_format: str = Field(default="json", validation_alias=AliasChoices("LOG_FORMAT", "APP_LOG_FORMAT"))
     log_level: str = Field(default="info", validation_alias=AliasChoices("LOG_LEVEL", "APP_LOG_LEVEL"))
@@ -183,7 +193,7 @@ class Settings(BaseSettings):
     def validate_runtime_configuration(self):
         self.environment = (self.environment or "development").strip().lower()
         if self.environment not in ALLOWED_ENVIRONMENTS:
-            raise ValueError("APP_ENV must be development, demo, test or production")
+            raise ValueError("APP_ENV must be development, demo, test, staging or production")
         # The legacy suite runs against SQLite fixtures and needs its historical
         # route surface; development and deployed KIBAK remain isolated by default.
         if self.environment == "test":
@@ -209,7 +219,7 @@ class Settings(BaseSettings):
         elif self.environment == "demo":
             self.seed_demo_data = True
         if self.session_cookie_secure is None:
-            self.session_cookie_secure = self.environment == "production"
+            self.session_cookie_secure = self.environment in {"staging", "production"}
         if self.session_cookie_samesite is None:
             self.session_cookie_samesite = "lax"
         self.session_cookie_samesite = self.session_cookie_samesite.strip().lower()
@@ -249,13 +259,22 @@ class Settings(BaseSettings):
         if self.log_format not in {"json", "text"}:
             raise ValueError("LOG_FORMAT must be json or text")
         self.log_level = (self.log_level or "info").strip().lower()
+        self.storage_backend = (self.storage_backend or "local").strip().lower()
+        if self.storage_backend not in {"local", "s3"}:
+            raise ValueError("STORAGE_BACKEND must be local or s3")
+        self.s3_prefix = (self.s3_prefix or "kibak").strip().strip("/") or "kibak"
+        if self.run_workers_in_web is None:
+            self.run_workers_in_web = self.environment in {"development", "demo", "test"} and not running_on_vercel
         if self.environment == "production" and self.performance_profiling_enabled:
             raise ValueError("PERFORMANCE_PROFILING_ENABLED cannot be enabled in production")
 
         if self.tenant_db_encryption_key and not _is_valid_fernet_key(self.tenant_db_encryption_key):
             raise ValueError("ENCRYPTION_KEY must be a valid Fernet key")
-        if not self.tenant_db_encryption_key and self.environment == "production":
-            raise ValueError("ENCRYPTION_KEY is required in production")
+        if not self.tenant_db_encryption_key and self.environment in {"staging", "production"}:
+            raise ValueError("ENCRYPTION_KEY is required in staging or production")
+        if self.storage_backend == "s3":
+            if not self.s3_bucket or not self.s3_access_key_id or not self.s3_secret_access_key:
+                raise ValueError("S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are required for S3 storage")
         if demo_runtime:
             if not self.master_database_url:
                 raise ValueError("MASTER_DATABASE_URL is required in demo or Vercel")
@@ -292,6 +311,29 @@ class Settings(BaseSettings):
                 raise ValueError("DEFAULT_ADMIN_EMAIL must be customized in production")
             if self.default_admin_password.strip().lower() in PROHIBITED_ADMIN_PASSWORDS or len(self.default_admin_password.strip()) < 12:
                 raise ValueError("DEFAULT_ADMIN_PASSWORD must be stronger than the demo value in production")
+
+        if self.environment == "staging":
+            if self.app_slug.strip().lower() != "kibak":
+                raise ValueError("APP_SLUG must be kibak in staging")
+            if not _looks_safe_secret_key(self.app_secret_key) or not _looks_safe_secret_key(self.auth_secret):
+                raise ValueError("SECRET_KEY and AUTH_SECRET must be strong and unique in staging")
+            if self.debug:
+                raise ValueError("DEBUG cannot be enabled in staging")
+            if self.seed_demo_data:
+                raise ValueError("ENABLE_DEMO_BOOTSTRAP cannot be enabled in staging")
+            if not self.session_cookie_secure:
+                raise ValueError("SESSION_COOKIE_SECURE must be enabled in staging")
+            if not self.allowed_hosts or "*" in self.allowed_hosts:
+                raise ValueError("ALLOWED_HOSTS must be explicit in staging")
+            if not self.cors_allowed_origins or "*" in self.cors_allowed_origins:
+                raise ValueError("CORS_ALLOWED_ORIGINS must be explicit in staging")
+            parsed_app_url = urlsplit(self.app_url.strip())
+            if parsed_app_url.scheme != "https" or not parsed_app_url.hostname or parsed_app_url.username or parsed_app_url.password:
+                raise ValueError("APP_URL must be an HTTPS URL without credentials in staging")
+            if self.tenant_db_mode != "external" or self.master_database_url.startswith("sqlite") or self.database_url.startswith("sqlite"):
+                raise ValueError("Staging requires external PostgreSQL master and tenant databases")
+            if self.storage_backend == "local":
+                raise ValueError("STORAGE_BACKEND must be s3 in staging")
 
         return self
 

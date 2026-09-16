@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import threading
+import signal
 import time
 from datetime import datetime, timezone
 from urllib.error import URLError
@@ -49,6 +50,7 @@ from app.whatsapp.service import send_automatic_response, whatsapp_config
 logger = logging.getLogger(__name__)
 _worker_started = False
 _worker_identity: str | None = None
+_shutdown_event = threading.Event()
 
 JOB_TYPES = {
     "email_sync",
@@ -987,12 +989,23 @@ def run_worker_cycle(*, max_jobs: int | None = None) -> dict[str, int]:
 def _worker_loop() -> None:
     settings = get_settings()
     poll_seconds = max(int(getattr(settings, "job_worker_poll_seconds", 10)), 5)
-    while True:
+    logger.info("Job worker started release=%s environment=%s", settings.release_sha, settings.environment)
+    while not _shutdown_event.is_set():
         try:
             run_worker_cycle()
         except Exception as exc:  # noqa: BLE001
             logger.exception("Job worker error: %s", exc)
-        time.sleep(poll_seconds)
+        _shutdown_event.wait(poll_seconds)
+    logger.info("Job worker stopped release=%s", settings.release_sha)
+
+
+def _request_shutdown(_signum=None, _frame=None) -> None:  # noqa: ANN001
+    _shutdown_event.set()
+
+
+def _install_signal_handlers() -> None:
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGINT, _request_shutdown)
 
 
 def start_job_worker() -> None:
@@ -1010,6 +1023,7 @@ def is_job_worker_started() -> bool:
 
 def main() -> None:
     configure_logging()
+    _install_signal_handlers()
     _worker_loop()
 
 

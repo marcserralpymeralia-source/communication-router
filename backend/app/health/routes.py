@@ -13,6 +13,7 @@ from app.admin.diagnostics import company_diagnostics, company_diagnostics_overv
 from app.core.metrics import snapshot_metrics
 from app.core.config import get_settings
 from app.core.storage import ensure_directory, resolve_temp_storage_dir
+from app.core.attachment_storage import validate_storage_configuration
 from app.master.database import get_master_db
 from app.master.migrations import master_migration_report
 from app.tenancy.database import get_tenant_db
@@ -31,6 +32,11 @@ def _ping_db(db: Session) -> bool:
 
 
 def _storage_probe() -> dict[str, object]:
+    configured = validate_storage_configuration()
+    if not configured["ok"]:
+        return {"ok": False, "status": "misconfigured", "error_type": "StorageConfigurationError", **configured}
+    if configured.get("persistent"):
+        return {"ok": True, "status": "configured", **configured}
     path = resolve_temp_storage_dir(".health")
     try:
         ensure_directory(path)
@@ -90,6 +96,9 @@ def health(request: Request, master_db: Session = Depends(get_master_db)):
 def health_live(request: Request):
     return {
         "ok": True,
+        "app_slug": get_settings().app_slug,
+        "environment": get_settings().environment,
+        "release_sha": get_settings().release_sha,
         "timestamp": datetime.now(timezone.utc),
         "request_id": getattr(request.state, "request_id", None),
         "correlation_id": getattr(request.state, "correlation_id", None) or getattr(request.state, "request_id", None),
@@ -110,6 +119,9 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
         master_schema = {"status": "unavailable", "is_current": False, "error_type": master_error}
     payload = {
         "ok": True,
+        "app_slug": get_settings().app_slug,
+        "environment": get_settings().environment,
+        "release_sha": get_settings().release_sha,
         "timestamp": datetime.now(timezone.utc),
         "master": master_ping,
         "master_schema_report": master_schema,

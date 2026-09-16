@@ -23,6 +23,7 @@ from app.mailboxes.google_oauth import (
     mailbox_oauth_status,
     new_oauth_state,
     refresh_google_access_token,
+    google_oauth_redirect_uri,
 )
 from app.mailboxes.routes import google_oauth_callback, google_oauth_start
 from app.master.service import TenantRole, TenantUser
@@ -136,6 +137,17 @@ class GoogleOAuthMailboxTests(unittest.TestCase):
             self.assertEqual(request.session["google_mailbox_oauth_state"]["company_id"], 1)
             self.assertEqual(request.session["google_mailbox_oauth_state"]["mailbox_id"], mailbox.id)
             self.assertNotIn("client-secret", location)
+
+    def test_staging_redirect_uses_public_app_url_behind_proxy(self):
+        settings = SimpleNamespace(
+            environment="staging",
+            app_url="https://pilot.example.com/",
+            google_oauth_redirect_uri="",
+        )
+        self.assertEqual(
+            google_oauth_redirect_uri(FakeRequest(), settings=settings),
+            "https://pilot.example.com/settings/mailboxes/oauth/google/callback",
+        )
 
     def test_start_rejects_non_admin_and_enabled_mailbox(self):
         with self.Session() as db:

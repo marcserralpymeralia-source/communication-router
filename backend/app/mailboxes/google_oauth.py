@@ -54,9 +54,14 @@ def google_oauth_scopes(settings=None) -> tuple[str, ...]:
 
 
 def google_oauth_redirect_uri(request, settings=None) -> str:
-    configured = str(getattr(settings or get_settings(), "google_oauth_redirect_uri", "") or "").strip()
+    runtime_settings = settings or get_settings()
+    configured = str(getattr(runtime_settings, "google_oauth_redirect_uri", "") or "").strip()
     if configured:
         return configured
+    if str(getattr(runtime_settings, "environment", "") or "").strip().lower() in {"staging", "production"}:
+        app_url = str(getattr(runtime_settings, "app_url", "") or "").strip().rstrip("/")
+        if app_url:
+            return f"{app_url}/settings/mailboxes/oauth/google/callback"
     return str(request.url_for("google_mailbox_oauth_callback"))
 
 

@@ -65,6 +65,25 @@ def _load_settings(env: dict[str, str]) -> object:
             baseline["DEFAULT_ADMIN_EMAIL"] = "ops@example.com"
         if "DEFAULT_ADMIN_PASSWORD" not in env:
             baseline["DEFAULT_ADMIN_PASSWORD"] = "StrongPassw0rd!2026"
+    if runtime_env == "staging":
+        baseline.update(
+            {
+                "APP_URL": "https://pilot.example.com",
+                "AUTH_SECRET": "kibak-staging-auth-" + "y" * 40,
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "pilot.example.com",
+                "CORS_ALLOWED_ORIGINS": "https://pilot.example.com",
+                "TENANT_DB_MODE": "external",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/kibak_tenant_pilot",
+                "TENANT_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/kibak_tenant_pilot",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/kibak_master",
+                "STORAGE_BACKEND": "s3",
+                "S3_BUCKET": "kibak-pilot",
+                "S3_ACCESS_KEY_ID": "access",
+                "S3_SECRET_ACCESS_KEY": "secret",
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+            }
+        )
     with patch.dict(os.environ, baseline, clear=True):
         get_settings.cache_clear()
         return get_settings()
@@ -75,14 +94,14 @@ class SecurityConfigurationTests(unittest.TestCase):
         get_settings.cache_clear()
 
     def test_environment_accepts_allowed_values(self):
-        for value in ["development", "demo", "test", "production"]:
+        for value in ["development", "demo", "test", "staging", "production"]:
             settings = _load_settings({"APP_ENV": value})
             self.assertEqual(settings.environment, value)
 
     def test_environment_rejects_unknown_value(self):
-        with patch.dict(os.environ, {"APP_ENV": "staging"}, clear=True):
+        with patch.dict(os.environ, {"APP_ENV": "unknown"}, clear=True):
             get_settings.cache_clear()
-            with self.assertRaisesRegex(ValueError, "APP_ENV must be development, demo, test or production"):
+            with self.assertRaisesRegex(ValueError, "APP_ENV must be development, demo, test, staging or production"):
                 get_settings()
 
     def test_development_keeps_local_defaults(self):

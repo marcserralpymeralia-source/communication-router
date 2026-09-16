@@ -23,4 +23,4 @@ COPY ESCALAR_CLIENTES.md ./ESCALAR_CLIENTES.md
 
 WORKDIR /app/backend
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

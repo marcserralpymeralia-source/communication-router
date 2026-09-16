@@ -61,8 +61,8 @@ async def app_lifespan(app: FastAPI):
         if master_db is not None:
             master_db.close()
     running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
-    if running_on_vercel or not master_db_ready:
-        logger.info("Vercel runtime detected: workers disabled in this process")
+    if running_on_vercel or not master_db_ready or not settings.run_workers_in_web:
+        logger.info("Workers disabled in web process runtime=%s release=%s", settings.environment, settings.release_sha)
     else:
         start_email_sync_worker()
         start_job_worker()

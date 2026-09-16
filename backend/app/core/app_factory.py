@@ -101,6 +101,18 @@ def create_app() -> FastAPI:
     configure_performance()
     settings = get_settings()
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=app_lifespan)
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):  # noqa: ANN001
+        response = await call_next(request)
+        if settings.environment in {"staging", "production"}:
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "DENY")
+            response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+            response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+            if settings.app_url.startswith("https://"):
+                response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
     # The branding middleware needs the decoded session to resolve the tenant.
     # Register it before SessionMiddleware so Starlette executes the session
     # middleware first on incoming requests.
