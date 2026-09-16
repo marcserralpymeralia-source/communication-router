@@ -266,7 +266,7 @@
           <div class="logo-preview-card small">
             {% if branding.logo_url %}
               <img src="{{ branding.logo_url }}" alt="Logo principal">
-              {% if not branding.logo_url.startswith('/static/uploads/branding/') %}
+              {% if not branding.logo_url.startswith('/static/uploads/branding/') and not branding.logo_url.startswith('/settings/branding/assets') %}
                 <small class="muted">Logo actual: URL externa</small>
               {% endif %}
             {% else %}
@@ -284,7 +284,7 @@
           <div class="logo-preview-card small">
             {% if branding.dark_logo_url %}
               <img src="{{ branding.dark_logo_url }}" alt="Logo oscuro">
-              {% if not branding.dark_logo_url.startswith('/static/uploads/branding/') %}
+              {% if not branding.dark_logo_url.startswith('/static/uploads/branding/') and not branding.dark_logo_url.startswith('/settings/branding/assets') %}
                 <small class="muted">Logo actual: URL externa</small>
               {% endif %}
             {% else %}
@@ -302,7 +302,7 @@
           <div class="logo-preview-card small favicon">
             {% if branding.favicon_url %}
               <img src="{{ branding.favicon_url }}" alt="Favicon">
-              {% if not branding.favicon_url.startswith('/static/uploads/branding/') %}
+              {% if not branding.favicon_url.startswith('/static/uploads/branding/') and not branding.favicon_url.startswith('/settings/branding/assets') %}
                 <small class="muted">Logo actual: URL externa</small>
               {% endif %}
             {% else %}
@@ -316,9 +316,9 @@
       <details class="drawer-subsection">
         <summary>URL externas y compatibilidad</summary>
         <div class="form-grid">
-          <label>Logo externo<input name="logo_url" value="{{ branding.logo_url if branding.logo_url and not branding.logo_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
-          <label>Logo oscuro externo<input name="dark_logo_url" value="{{ branding.dark_logo_url if branding.dark_logo_url and not branding.dark_logo_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
-          <label>Favicon externo<input name="favicon_url" value="{{ branding.favicon_url if branding.favicon_url and not branding.favicon_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
+          <label>Logo externo<input name="logo_url" value="{{ branding.logo_url if branding.logo_url and not branding.logo_url.startswith('/static/uploads/branding/') and not branding.logo_url.startswith('/settings/branding/assets') else '' }}" placeholder="https://..."></label>
+          <label>Logo oscuro externo<input name="dark_logo_url" value="{{ branding.dark_logo_url if branding.dark_logo_url and not branding.dark_logo_url.startswith('/static/uploads/branding/') and not branding.dark_logo_url.startswith('/settings/branding/assets') else '' }}" placeholder="https://..."></label>
+          <label>Favicon externo<input name="favicon_url" value="{{ branding.favicon_url if branding.favicon_url and not branding.favicon_url.startswith('/static/uploads/branding/') and not branding.favicon_url.startswith('/settings/branding/assets') else '' }}" placeholder="https://..."></label>
         </div>
       </details>
     </section>

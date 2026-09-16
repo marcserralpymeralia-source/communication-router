@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from io import BytesIO
@@ -18,6 +19,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 from app.core.storage import ensure_directory, resolve_temp_storage_dir
 
 PREVIEW_DIR = resolve_temp_storage_dir("import_previews")
+PREVIEW_MAX_AGE_SECONDS = 24 * 60 * 60
 
 CUSTOMER_FIELDS = {
     "code": "Codigo cliente",
@@ -279,6 +281,7 @@ async def create_preview(
     content = await file.read()
     token = uuid.uuid4().hex
     suffix = Path(file.filename or "import.csv").suffix.lower() or ".csv"
+    cleanup_expired_previews()
     ensure_directory(PREVIEW_DIR)
     (PREVIEW_DIR / f"{token}{suffix}").write_bytes(content)
     df = read_table_from_bytes(content, file.filename or "import.csv", encoding=encoding)
@@ -302,6 +305,24 @@ def read_preview(token: str, filename: str, encoding: str = "utf-8") -> pd.DataF
     if not matches:
         raise FileNotFoundError("No se encontro la previsualizacion de importacion.")
     return read_table_from_bytes(matches[0].read_bytes(), filename or matches[0].name, encoding=encoding)
+
+
+def cleanup_expired_previews(*, max_age_seconds: int = PREVIEW_MAX_AGE_SECONDS) -> int:
+    """Remove only stale files created under the dedicated temporary directory."""
+    if max_age_seconds < 0:
+        raise ValueError("max_age_seconds debe ser no negativo")
+    if not PREVIEW_DIR.exists():
+        return 0
+    cutoff = time.time() - max_age_seconds
+    removed = 0
+    for candidate in PREVIEW_DIR.iterdir():
+        try:
+            if candidate.is_file() and candidate.stat().st_mtime < cutoff:
+                candidate.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def as_bool(value: str) -> bool:

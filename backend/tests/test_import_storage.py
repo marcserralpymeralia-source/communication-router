@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -12,6 +14,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class ImportStorageTests(unittest.TestCase):
+    def test_expired_import_previews_are_cleaned_without_touching_directories(self):
+        from app.imports.service import cleanup_expired_previews
+
+        with tempfile.TemporaryDirectory() as tempdir, patch("app.imports.service.PREVIEW_DIR", Path(tempdir)):
+            stale = Path(tempdir) / "stale.csv"
+            fresh = Path(tempdir) / "fresh.csv"
+            other_dir = Path(tempdir) / "subdir"
+            stale.write_bytes(b"old")
+            fresh.write_bytes(b"new")
+            other_dir.mkdir()
+            old = time.time() - 120
+            os.utime(stale, (old, old))
+            self.assertEqual(cleanup_expired_previews(max_age_seconds=60), 1)
+            self.assertFalse(stale.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(other_dir.exists())
+
     def test_resolve_temp_storage_dir_prefers_configured_and_vercel_roots(self):
         from app.core.storage import resolve_temp_storage_dir
 

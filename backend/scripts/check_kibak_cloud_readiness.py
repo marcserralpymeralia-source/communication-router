@@ -50,6 +50,7 @@ def run_checks(*, check_database: bool = True) -> list[tuple[str, str, str]]:
     _check(results, "Fernet", "PASS" if settings.tenant_db_encryption_key else "FAIL", "configurada" if settings.tenant_db_encryption_key else "ausente")
     storage = validate_storage_configuration()
     _check(results, "Storage", "PASS" if storage["ok"] and storage.get("persistent") else "FAIL", "object storage configurado" if storage["ok"] and storage.get("persistent") else "se requiere S3-compatible en staging")
+    _check(results, "Static assets", "PASS", "assets versionados o temporales; no son fuente de persistencia")
     google_ready = bool(settings.google_oauth_client_id and settings.google_oauth_client_secret and settings.google_oauth_redirect_uri)
     _check(results, "Google OAuth", "PASS" if google_ready else "WARN", "configurado" if google_ready else "pendiente de configuración del cliente")
 

@@ -5,13 +5,14 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from time import perf_counter
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.templating import templates
 from app.core.config import get_settings
+from app.core.attachment_storage import TenantStorageError
 from app.core.middleware import invalidate_branding_cache
 from app.auth.dependencies import current_user
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, openai_model_description, openai_model_label, openai_model_option_payload, OPENAI_MODEL_PRESET_VALUES, resolve_openai_runtime_model, supports_custom_temperature
@@ -24,7 +25,7 @@ from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
 from app.settings.autoconfig import detect_email_configuration
-from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
+from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, read_branding_asset, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.application import run_connection_test, update_settings_section_async
@@ -1054,6 +1055,15 @@ def get_branding(db: Session = Depends(get_tenant_db), user: TenantUser = Depend
     return JSONResponse(branding_to_dict(get_or_create_branding(db, user.company_id)))
 
 
+@router.get("/branding/assets")
+def get_branding_asset(ref: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    try:
+        content, media_type = read_branding_asset(db, user.company_id, ref)
+    except (FileNotFoundError, OSError, TenantStorageError):
+        raise HTTPException(status_code=404, detail="Asset no encontrado") from None
+    return Response(content=content, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+
+
 @router.put("/branding")
 async def put_branding(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if user.role.name != "Administrador":
@@ -1092,10 +1102,10 @@ async def update_branding(request: Request, db: Session = Depends(get_tenant_db)
     ]:
         upload = formdata.get(upload_key)
         if form.get(remove_key) == "on":
-            delete_brand_asset(getattr(branding, field))
+            delete_brand_asset(getattr(branding, field), tenant_id=user.company_id)
             setattr(branding, field, None)
         elif isinstance(upload, UploadFile) and upload.filename:
-            delete_brand_asset(getattr(branding, field))
+            delete_brand_asset(getattr(branding, field), tenant_id=user.company_id)
             setattr(branding, field, await store_brand_asset(user.company_id, upload, prefix))
     db.commit()
     invalidate_branding_cache(user.company_id)
@@ -1121,7 +1131,7 @@ def reset_company_default(db: Session = Depends(get_tenant_db), user: TenantUser
     settings = get_settings()
     company = db.get(Company, user.company_id)
     if company:
-        delete_brand_asset(company.logo_url)
+        delete_brand_asset(company.logo_url, tenant_id=user.company_id)
         company.name = settings.default_company_name
         company.legal_name = None
         company.tax_id = None

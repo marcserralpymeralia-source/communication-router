@@ -57,13 +57,14 @@ restarts; successful login clears only the identity window, while the IP
 budget remains in place. The table should be included in normal database
 backups and is cleaned lazily during authentication.
 
-Persistent communication and mailbox attachments use the tenant-scoped storage
-adapter. Local references are written below `attachments/tenant-<id>` and S3
-objects below `<prefix>/tenants/<id>/`; reads and deletes reject another tenant,
-traversal and missing context. The worker receives and validates the tenant ID
-before dispatching jobs. Import previews remain temporary, while legacy mock
-PDFs and static branding uploads are outside the KIBAK pilot attachment path
-and require a separate durable-assets decision before public use.
+Persistent communication, mailbox attachments and tenant branding uploads use
+the tenant-scoped storage adapter. Local references are written below
+`attachments/tenant-<id>` and S3 objects below `<prefix>/tenants/<id>`; reads and
+deletes reject another tenant, traversal and missing context. Branding assets
+are served through an authenticated route that only accepts the active tenant's
+registered references. The worker receives and validates the tenant ID before
+dispatching jobs. Import previews remain temporary, while legacy mock PDFs stay
+regenerable test/legacy data outside the KIBAK pilot attachment path.
 
 ## 5. Migrate and provision
 

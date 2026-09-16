@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.core.attachment_storage import TenantStorageError, delete_attachment, read_attachment, save_attachment
+from app.settings.branding import branding_asset_storage_ref, branding_asset_url, is_internal_brand_asset, store_brand_asset
 
 
 class TenantStorageTests(unittest.TestCase):
@@ -73,6 +74,24 @@ class TenantStorageTests(unittest.TestCase):
             save_attachment(tenant_id=None, filename="file.txt", payload=b"data")
         with self.assertRaises(TenantStorageError):
             read_attachment("/tmp/file.txt", tenant_id=None)
+
+
+class BrandingStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_branding_upload_uses_tenant_storage_reference(self):
+        class Upload:
+            filename = "logo.svg"
+            content_type = "image/svg+xml"
+
+            async def read(self):
+                return b"<svg></svg>"
+
+        with patch("app.settings.branding.save_attachment", return_value="/tmp/attachments/tenant-10/logo.svg") as save:
+            value = await store_brand_asset(10, Upload(), "logo-main")
+        save.assert_called_once()
+        self.assertEqual(branding_asset_storage_ref(value), "/tmp/attachments/tenant-10/logo.svg")
+        self.assertTrue(is_internal_brand_asset(value))
+        self.assertFalse(is_internal_brand_asset("https://cdn.example/logo.svg"))
+        self.assertIn("/settings/branding/assets?ref=", branding_asset_url("/tmp/attachments/tenant-10/logo.svg"))
 
 
 if __name__ == "__main__":

@@ -1,13 +1,16 @@
 import json
+import mimetypes
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import parse_qs, quote, urlsplit
 from uuid import uuid4
 
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.attachment_storage import delete_attachment, read_attachment, save_attachment
 from app.core.config import get_settings
 from app.db.models import BrandingSettings, utcnow
 
@@ -120,7 +123,6 @@ DEFAULT_MICROCOPY = {
     "export_success": "Pedido enviado correctamente al sistema de gestion.",
 }
 
-BRANDING_UPLOAD_DIR = Path(__file__).resolve().parents[1] / "static" / "uploads" / "branding"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
 
 
@@ -271,10 +273,27 @@ def update_branding_from_form(branding: BrandingSettings, form: dict[str, str], 
 
 
 def is_internal_brand_asset(value: str | None) -> bool:
-    return bool(value) and value.startswith("/static/uploads/branding/")
+    return bool(value) and (value.startswith("/static/uploads/branding/") or value.startswith("/settings/branding/assets"))
 
 
-def delete_brand_asset(value: str | None) -> None:
+def branding_asset_storage_ref(value: str | None) -> str | None:
+    if not value or not value.startswith("/settings/branding/assets"):
+        return None
+    return parse_qs(urlsplit(value).query).get("ref", [None])[0]
+
+
+def branding_asset_url(storage_ref: str) -> str:
+    return f"/settings/branding/assets?ref={quote(storage_ref, safe='')}"
+
+
+def delete_brand_asset(value: str | None, *, tenant_id: int | None = None) -> None:
+    storage_ref = branding_asset_storage_ref(value)
+    if storage_ref:
+        if tenant_id is not None:
+            delete_attachment(storage_ref, tenant_id=tenant_id)
+        return
+    if value and value.startswith("/settings/branding/assets"):
+        return
     if not is_internal_brand_asset(value):
         return
     relative = value.removeprefix("/static/")
@@ -287,11 +306,24 @@ async def store_brand_asset(company_id: int, upload: UploadFile, prefix: str) ->
     suffix = Path(upload.filename or "").suffix.lower()
     if suffix not in ALLOWED_LOGO_EXTENSIONS:
         raise ValueError("Formato de archivo no permitido. Usa PNG, JPG, SVG o WEBP.")
-    BRANDING_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"{company_id}-{prefix}-{uuid4().hex}{suffix}"
-    path = BRANDING_UPLOAD_DIR / filename
-    path.write_bytes(await upload.read())
-    return f"/static/uploads/branding/{filename}"
+    storage_ref = save_attachment(
+        tenant_id=company_id,
+        filename=f"branding-{prefix}-{uuid4().hex}{suffix}",
+        payload=await upload.read(),
+        content_type=upload.content_type or mimetypes.guess_type(upload.filename or "")[0],
+    )
+    return branding_asset_url(storage_ref)
+
+
+def read_branding_asset(db: Session, company_id: int, storage_ref: str) -> tuple[bytes, str]:
+    branding = db.query(BrandingSettings).filter(BrandingSettings.company_id == company_id).one_or_none()
+    allowed = {
+        branding_asset_storage_ref(getattr(branding, field, None))
+        for field in ("logo_url", "dark_logo_url", "favicon_url")
+    } if branding else set()
+    if storage_ref not in allowed:
+        raise FileNotFoundError("El asset no pertenece al branding activo del tenant.")
+    return read_attachment(storage_ref, tenant_id=company_id), mimetypes.guess_type(storage_ref)[0] or "application/octet-stream"
 
 
 def reset_branding(branding: BrandingSettings, user_id: int | None) -> None:

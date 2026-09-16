@@ -216,10 +216,10 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
             company.active = form.get("active") == "on"
             logo_file = formdata.get("logo_file")
             if form.get("remove_logo") == "on":
-                delete_brand_asset(company.logo_url)
+                delete_brand_asset(company.logo_url, tenant_id=user.company_id)
                 company.logo_url = None
             elif isinstance(logo_file, UploadFile) and logo_file.filename:
-                delete_brand_asset(company.logo_url)
+                delete_brand_asset(company.logo_url, tenant_id=user.company_id)
                 company.logo_url = await store_brand_asset(user.company_id, logo_file, "company-logo")
             elif form.get("logo_url"):
                 company.logo_url = form["logo_url"].strip()
