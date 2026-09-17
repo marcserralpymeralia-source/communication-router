@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.security import hash_password
 from app.db.database import Base
 from app.db.models import Company
+from app.migrations.kibak_baseline import KIBAK_MASTER_TABLES, KIBAK_TENANT_TABLES
 from app.master.database import MasterBase
 from app.master.migrations import master_migration_report, upgrade_master_schema
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
@@ -24,8 +25,17 @@ class PostgreSQLSmokeTests(unittest.TestCase):
         master_engine = create_engine(master_url)
         tenant_engine = create_engine(tenant_url)
         try:
-            MasterBase.metadata.create_all(master_engine)
-            Base.metadata.create_all(tenant_engine)
+            # Keep the smoke target aligned with the clean KIBAK PostgreSQL
+            # baseline. Creating all historical metadata here would leave
+            # legacy tables behind and make the strict schema report fail.
+            MasterBase.metadata.create_all(
+                master_engine,
+                tables=[MasterBase.metadata.tables[name] for name in KIBAK_MASTER_TABLES],
+            )
+            Base.metadata.create_all(
+                tenant_engine,
+                tables=[Base.metadata.tables[name] for name in KIBAK_TENANT_TABLES],
+            )
             master_session = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)()
             tenant_session = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)()
             try:
