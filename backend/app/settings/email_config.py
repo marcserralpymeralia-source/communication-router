@@ -97,7 +97,16 @@ def email_templates(db: Session, company_id: int) -> list[EmailTemplate]:
 
 
 def email_config_status(settings: EmailSettings) -> dict:
-    imap_ready = bool(settings.imap_host and settings.imap_username and settings.imap_password_encrypted)
+    oauth_ready = bool(
+        settings.connection_method == "oauth2"
+        and settings.provider in {"gmail", "microsoft365"}
+        and settings.refresh_token_encrypted
+    )
+    imap_ready = bool(
+        settings.imap_host
+        and settings.imap_username
+        and (settings.imap_password_encrypted or oauth_ready)
+    )
     smtp_ready = bool(settings.smtp_host and settings.smtp_username and settings.smtp_password_encrypted and (settings.from_email or settings.smtp_username))
     provider_status = {
         "imap": "Conectada" if imap_ready else "Pendiente de conexión",

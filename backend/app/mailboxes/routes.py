@@ -30,6 +30,16 @@ from app.mailboxes.google_oauth import (
     new_oauth_state,
     encrypt_refresh_token,
 )
+from app.mailboxes.microsoft_oauth import (
+    MICROSOFT_OAUTH_STATE_SESSION_KEY,
+    MicrosoftOAuthError,
+    build_microsoft_authorization_url,
+    exchange_microsoft_authorization_code,
+    microsoft_oauth_configured,
+    microsoft_oauth_redirect_uri,
+    new_oauth_state as new_microsoft_oauth_state,
+    encrypt_refresh_token as encrypt_microsoft_refresh_token,
+)
 from app.master.database import get_master_db
 from app.master.models import MailboxSyncState
 from app.master.service import TenantUser
@@ -104,8 +114,8 @@ def _save_mailbox(db: Session, mailbox: Mailbox, data: dict[str, str], user: Ten
     mailbox.email_address = (data.get("email_address") or mailbox.email_address or mailbox.connected_email or mailbox.imap_username or "").strip().lower()
     mailbox.connected_email = (data.get("connected_email") or mailbox.email_address or "").strip() or None
     mailbox.inbox_folder = (mailbox.inbox_folder or mailbox.mailbox or "INBOX").strip() or "INBOX"
-    if mailbox.provider == "gmail" and mailbox.connection_method == "oauth2":
-        mailbox.imap_host = mailbox.imap_host or "imap.gmail.com"
+    if mailbox.connection_method == "oauth2" and mailbox.provider in {"gmail", "microsoft365"}:
+        mailbox.imap_host = mailbox.imap_host or ("imap.gmail.com" if mailbox.provider == "gmail" else "outlook.office365.com")
         mailbox.imap_port = mailbox.imap_port or 993
         mailbox.imap_security = mailbox.imap_security or "ssl_tls"
         mailbox.imap_use_ssl = True
@@ -258,6 +268,98 @@ def google_oauth_start(
         )
     except GoogleOAuthError as exc:
         request.session.pop(GOOGLE_OAUTH_STATE_SESSION_KEY, None)
+        return _oauth_feedback(str(exc))
+    return RedirectResponse(authorization_url, status_code=307)
+
+
+@router.get("/oauth/microsoft/callback", name="microsoft_mailbox_oauth_callback")
+def microsoft_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not _can_edit(user):
+        return _oauth_feedback("No tienes permisos para conectar Microsoft.")
+    stored = request.session.pop(MICROSOFT_OAUTH_STATE_SESSION_KEY, None)
+    received_state = (state or "").strip()
+    if not isinstance(stored, dict) or not received_state or not hmac.compare_digest(str(stored.get("state") or ""), received_state):
+        return _oauth_feedback("La sesión de conexión con Microsoft ha caducado. Recarga la pantalla.")
+    try:
+        expires_at = int(stored.get("expires_at") or 0)
+        company_id = int(stored.get("company_id"))
+        mailbox_id = int(stored.get("mailbox_id"))
+        user_id = int(stored.get("user_id"))
+    except (TypeError, ValueError):
+        return _oauth_feedback("La sesión de conexión con Microsoft no es válida.")
+    if expires_at <= int(datetime.now(timezone.utc).timestamp()):
+        return _oauth_feedback("La sesión de conexión con Microsoft ha caducado. Recarga la pantalla.")
+    if company_id != user.company_id or user_id != user.id:
+        return _oauth_feedback("La sesión de conexión no coincide con el tenant actual.")
+    mailbox = get_mailbox(db, user.company_id, mailbox_id)
+    if not mailbox:
+        return _oauth_feedback("No se encontró el buzón solicitado.")
+    if mailbox.enabled or mailbox.auto_sync_enabled:
+        return _oauth_feedback("Desactiva el buzón y la sincronización antes de conectar Microsoft.")
+    if error or not code:
+        return _oauth_feedback("La autorización de Microsoft no se ha completado.")
+    if mailbox.provider != "microsoft365" or mailbox.connection_method != "oauth2":
+        return _oauth_feedback("Selecciona Microsoft 365 y OAuth del proveedor en la configuración del buzón.")
+    try:
+        redirect_uri = microsoft_oauth_redirect_uri(request)
+        tokens = exchange_microsoft_authorization_code(code, redirect_uri)
+    except MicrosoftOAuthError as exc:
+        log_action(db, company_id=user.company_id, user=user, action="settings.mailbox.oauth.microsoft.failed", entity_type="mailbox", entity_id=mailbox.id, message=f"Conexión Microsoft OAuth fallida: {exc.error_type}")
+        return _oauth_feedback(str(exc))
+    mailbox.provider = "microsoft365"
+    mailbox.connection_method = "oauth2"
+    mailbox.connected_email = mailbox.email_address
+    mailbox.imap_host = mailbox.imap_host or "outlook.office365.com"
+    mailbox.imap_port = mailbox.imap_port or 993
+    mailbox.imap_security = mailbox.imap_security or "ssl_tls"
+    mailbox.imap_use_ssl = True
+    mailbox.imap_username = mailbox.imap_username or mailbox.email_address
+    mailbox.refresh_token_encrypted = encrypt_microsoft_refresh_token(tokens.refresh_token or "")
+    mailbox.access_token_encrypted = None
+    mailbox.imap_password_encrypted = None
+    mailbox.updated_by = resolve_updated_by_id(db, user)
+    mailbox.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="settings.mailbox.oauth.microsoft.connected", entity_type="mailbox", entity_id=mailbox.id, message="Buzón conectado con Microsoft OAuth")
+    return _oauth_feedback("Microsoft se ha conectado correctamente. El buzón sigue desactivado.", ok=True)
+
+
+@router.get("/{mailbox_id}/oauth/microsoft/start", name="microsoft_mailbox_oauth_start")
+def microsoft_oauth_start(
+    mailbox_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not _can_edit(user):
+        return _oauth_feedback("No tienes permisos para conectar Microsoft.")
+    mailbox = get_mailbox(db, user.company_id, mailbox_id)
+    if not mailbox:
+        return _oauth_feedback("No se encontró el buzón solicitado.")
+    if mailbox.provider != "microsoft365" or mailbox.connection_method != "oauth2":
+        return _oauth_feedback("Selecciona Microsoft 365 y OAuth del proveedor en la configuración del buzón.")
+    if mailbox.enabled or mailbox.auto_sync_enabled:
+        return _oauth_feedback("Desactiva el buzón y la sincronización antes de conectar Microsoft.")
+    if not microsoft_oauth_configured():
+        return _oauth_feedback("La conexión Microsoft OAuth todavía no está configurada en KIBAK.")
+    oauth_state = new_microsoft_oauth_state(company_id=user.company_id, mailbox_id=mailbox.id, user_id=user.id)
+    request.session[MICROSOFT_OAUTH_STATE_SESSION_KEY] = oauth_state
+    try:
+        redirect_uri = microsoft_oauth_redirect_uri(request)
+        authorization_url = build_microsoft_authorization_url(
+            state=oauth_state["state"],
+            redirect_uri=redirect_uri,
+            login_hint=mailbox.email_address,
+        )
+    except MicrosoftOAuthError as exc:
+        request.session.pop(MICROSOFT_OAUTH_STATE_SESSION_KEY, None)
         return _oauth_feedback(str(exc))
     return RedirectResponse(authorization_url, status_code=307)
 
