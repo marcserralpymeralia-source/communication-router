@@ -17,6 +17,12 @@
 
   {% if message %}<div class="alert success" role="status">{{ message }}</div>{% endif %}
   {% if error %}<div class="alert error" role="alert">{{ error }}</div>{% endif %}
+  {% if pilot_sync_result %}
+    <div class="alert success" role="status">
+      <strong>Resultado del piloto</strong>
+      <span>Importados: {{ pilot_sync_result.imported }} · Duplicados: {{ pilot_sync_result.duplicates }} · Omitidos por adjuntos: {{ pilot_sync_result.skipped_attachment }} · Candidatos revisados: {{ pilot_sync_result.candidates_reviewed }}</span>
+    </div>
+  {% endif %}
 
   <section class="mailboxes-list">
     {% for mailbox in mailboxes %}
@@ -54,6 +60,12 @@
                 <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/sync">
                   <button class="secondary compact-button" data-loading-text="Encolando...">{{ "Procesar correos ahora" if app_settings.is_pilot_runtime else "Sincronizar" }}</button>
                 </form>
+                {% if microsoft_oauth and oauth_connected %}
+                  <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/pilot-sync">
+                    <button class="secondary compact-button" data-loading-text="Importando...">Piloto · importar máx. 3</button>
+                  </form>
+                  <p class="muted settings-status-note">Importa hasta 3 correos no leídos sin adjuntos recibidos desde el 14/09/2026. No los marca como leídos, no ejecuta IA y no activa la sincronización automática.</p>
+                {% endif %}
                 <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/backfill">
                   <input type="hidden" name="limit" value="{{ 10 if app_settings.is_pilot_runtime else 100 }}">
                   <button class="secondary compact-button" data-loading-text="Encolando...">Backfill</button>
@@ -101,7 +113,6 @@
             <span>{{ state.last_error_message }}</span>
           </div>
         {% endif %}
-
         {% if can_edit %}
           <details class="mailbox-config-drawer">
             <summary class="mailbox-config-summary">

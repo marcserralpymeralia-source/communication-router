@@ -306,6 +306,8 @@ class MailboxFoundationTests(unittest.TestCase):
         self.assertIn('<option value="imap">IMAP manual</option>', html)
         self.assertIn('<option value="microsoft365">Microsoft 365 (OAuth)</option>', html)
         self.assertIn('href="/settings/mailboxes/{{ mailbox.id }}/oauth/microsoft/start"', html)
+        self.assertIn('action="/settings/mailboxes/{{ mailbox.id }}/pilot-sync"', html)
+        self.assertIn("Piloto · importar máx. 3", html)
         self.assertIn('id="new-mailbox-manual-fields"', html)
         self.assertIn('manualFields.style.display = microsoft ? "none" : ""', html)
         self.assertIn('input.disabled = microsoft', html)

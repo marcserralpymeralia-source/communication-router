@@ -18,6 +18,7 @@ from app.db.models import Email, InboundMessage, Mailbox
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.mailboxes.service import get_mailbox, get_or_create_mailbox_sync_state, list_mailboxes, serialize_mailbox
+from app.mailboxes.pilot_sync import run_pilot_sync
 from app.mailboxes.google_oauth import (
     GOOGLE_OAUTH_STATE_SESSION_KEY,
     GoogleOAuthError,
@@ -186,6 +187,14 @@ def mailboxes_page(
             "can_test": _can_test(user),
             "message": request.query_params.get("mailbox_message"),
             "error": request.query_params.get("mailbox_error"),
+            "pilot_sync_result": {
+                "imported": request.query_params.get("pilot_imported"),
+                "duplicates": request.query_params.get("pilot_duplicates"),
+                "skipped_attachment": request.query_params.get("pilot_skipped_attachment"),
+                "candidates_reviewed": request.query_params.get("pilot_candidates_reviewed"),
+            }
+            if request.query_params.get("pilot_imported") is not None
+            else None,
         },
     )
 
@@ -583,6 +592,40 @@ def sync_mailbox(
     limit = effective_email_batch_limit(mailbox.read_limit, standard_default=10, standard_max=50)
     job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"mailbox_id": mailbox.id, "auto_process": False, "unread_only": mailbox.read_unread_only, "limit": limit}, created_by_user_id=user.id)
     return _response(request, {"ok": True, "job_id": job.id, "status": job.status, "mailbox_id": mailbox.id})
+
+
+@router.post("/{mailbox_id}/pilot-sync")
+def pilot_sync_mailbox(
+    mailbox_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not _can_test(user):
+        return _response(request, {"ok": False, "message": "No tienes permisos para ejecutar el piloto."}, status_code=403)
+    mailbox = get_mailbox(db, user.company_id, mailbox_id)
+    if not mailbox:
+        return _response(request, {"ok": False, "message": "No se encontró el buzón solicitado."}, status_code=404)
+    result = run_pilot_sync(db, mailbox, user.company_id)
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+    if not result.get("ok"):
+        return _response(
+            request,
+            {"ok": False, "message": result.get("message") or "No se pudo ejecutar el piloto."},
+            redirect=f"/settings/mailboxes?{urlencode({'mailbox_error': result.get('message') or 'No se pudo ejecutar el piloto.'})}",
+            status_code=303,
+        )
+    query = urlencode(
+        {
+            "mailbox_message": "Piloto completado.",
+            "pilot_imported": result.get("imported", 0),
+            "pilot_duplicates": result.get("duplicates", 0),
+            "pilot_skipped_attachment": result.get("skipped_attachment", 0),
+            "pilot_candidates_reviewed": result.get("candidates_reviewed", 0),
+        }
+    )
+    return _response(request, {"ok": True, "result": result}, redirect=f"/settings/mailboxes?{query}", status_code=303)
 
 
 @router.post("/{mailbox_id}/backfill")
