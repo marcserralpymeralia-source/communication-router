@@ -216,6 +216,101 @@ class MailboxFoundationTests(unittest.TestCase):
             self.assertFalse(master_db.scalar(select(MailboxSyncState)).enabled)
             connection_test.assert_not_called()
 
+    def test_create_microsoft_oauth_mailbox_forces_safe_server_defaults(self):
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="Tenant A"))
+            db.commit()
+            user = TenantUser(
+                id=1,
+                email="admin@example.com",
+                name="Admin",
+                is_active=True,
+                company_id=1,
+                company_name="Tenant A",
+                company_slug="tenant-a",
+                role=TenantRole("Administrador"),
+                membership_id=1,
+            )
+            request = FakeRequest(
+                {
+                    "name": "Outlook piloto",
+                    "email_address": "pilot@example.com",
+                    "provider": "microsoft365",
+                    "connection_method": "oauth2",
+                    "imap_username": "attacker@example.com",
+                    "imap_password_encrypted": "must-not-persist",
+                    "imap_host": "imap.attacker.test",
+                    "imap_port": "143",
+                    "imap_security": "none",
+                    "inbox_folder": "INBOX",
+                }
+            )
+            with patch("app.mailboxes.routes.test_imap_connection") as connection_test, patch("app.mailboxes.routes.enqueue_job") as enqueue_job:
+                response = asyncio.run(create_mailbox(request, db, master_db, user))
+
+            self.assertEqual(response.status_code, 303)
+            query = parse_qs(urlparse(response.headers["location"]).query)
+            self.assertEqual(query["mailbox_message"], ["Buzón Microsoft 365 preparado para conectar."])
+            mailbox = db.scalar(select(Mailbox).where(Mailbox.company_id == 1))
+            self.assertEqual(mailbox.provider, "microsoft365")
+            self.assertEqual(mailbox.connection_method, "oauth2")
+            self.assertEqual(mailbox.email_address, "pilot@example.com")
+            self.assertEqual(mailbox.imap_host, "outlook.office365.com")
+            self.assertEqual(mailbox.imap_port, 993)
+            self.assertEqual(mailbox.imap_security, "ssl_tls")
+            self.assertEqual(mailbox.imap_username, "pilot@example.com")
+            self.assertIsNone(mailbox.imap_password_encrypted)
+            self.assertIsNone(mailbox.access_token_encrypted)
+            self.assertIsNone(mailbox.refresh_token_encrypted)
+            self.assertFalse(mailbox.enabled)
+            self.assertFalse(mailbox.auto_sync_enabled)
+            self.assertFalse(mailbox.mark_as_read_after_import)
+            self.assertFalse(mailbox.smtp_enabled)
+            self.assertEqual(master_db.query(MailboxSyncState).count(), 1)
+            self.assertFalse(master_db.scalar(select(MailboxSyncState)).enabled)
+            connection_test.assert_not_called()
+            enqueue_job.assert_not_called()
+
+    def test_create_rejects_incoherent_microsoft_password_profile(self):
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="Tenant A"))
+            db.commit()
+            user = TenantUser(
+                id=1,
+                email="admin@example.com",
+                name="Admin",
+                is_active=True,
+                company_id=1,
+                company_name="Tenant A",
+                company_slug="tenant-a",
+                role=TenantRole("Administrador"),
+                membership_id=1,
+            )
+            response = asyncio.run(
+                create_mailbox(
+                    FakeRequest({"email_address": "pilot@example.com", "provider": "microsoft365", "connection_method": "password"}),
+                    db,
+                    master_db,
+                    user,
+                )
+            )
+            self.assertEqual(response.status_code, 303)
+            self.assertIn("Microsoft 365 requiere OAuth", parse_qs(urlparse(response.headers["location"]).query)["mailbox_error"][0])
+            self.assertEqual(db.query(Mailbox).filter(Mailbox.company_id == 1).count(), 0)
+
+    def test_mailbox_creation_template_exposes_manual_and_microsoft_profiles(self):
+        from pathlib import Path
+
+        template = Path(__file__).parents[1] / "app" / "templates" / "settings" / "mailboxes.html"
+        html = template.read_text(encoding="utf-8")
+        self.assertIn('<option value="imap">IMAP manual</option>', html)
+        self.assertIn('<option value="microsoft365">Microsoft 365 (OAuth)</option>', html)
+        self.assertIn('href="/settings/mailboxes/{{ mailbox.id }}/oauth/microsoft/start"', html)
+        self.assertIn('id="new-mailbox-manual-fields"', html)
+        self.assertIn('manualFields.style.display = microsoft ? "none" : ""', html)
+        self.assertIn('input.disabled = microsoft', html)
+        self.assertIn('input.required = !microsoft', html)
+
     def test_update_mailbox_does_not_duplicate_or_activate_and_reports_feedback(self):
         with self.tenant_session() as db, self.master_session() as master_db:
             db.add(Company(id=1, name="Tenant A"))

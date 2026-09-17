@@ -215,19 +215,29 @@
         <div class="mailbox-form-grid">
           <label>Nombre visible<input name="name" placeholder="Pedidos"></label>
           <label>Dirección<input name="email_address" type="email" placeholder="info@empresa.com" required></label>
-          <label>Usuario IMAP<input name="imap_username" autocomplete="username"></label>
-          <label>Contraseña IMAP<input name="imap_password_encrypted" type="password" autocomplete="new-password" required></label>
-          <label>Host IMAP<input name="imap_host" placeholder="imap.ejemplo.com" required></label>
-          <label>Puerto IMAP<input name="imap_port" type="number" value="993"></label>
-          <label>Seguridad
-            <select name="imap_security">
-              <option value="ssl_tls">SSL/TLS</option>
-              <option value="starttls">STARTTLS</option>
-              <option value="none">Sin cifrado</option>
+          <label>Tipo de conexión
+            <select name="provider" id="new-mailbox-provider">
+              <option value="imap">IMAP manual</option>
+              <option value="microsoft365">Microsoft 365 (OAuth)</option>
             </select>
           </label>
+          <input type="hidden" name="connection_method" id="new-mailbox-connection-method" value="password">
+          <div id="new-mailbox-manual-fields" class="form-grid form-grid-span-full">
+            <label>Usuario IMAP<input name="imap_username" autocomplete="username" data-manual-field></label>
+            <label>Contraseña IMAP<input name="imap_password_encrypted" type="password" autocomplete="new-password" data-manual-field></label>
+            <label>Host IMAP<input name="imap_host" placeholder="imap.ejemplo.com" data-manual-field></label>
+            <label>Puerto IMAP<input name="imap_port" type="number" value="993"></label>
+            <label>Seguridad
+              <select name="imap_security">
+                <option value="ssl_tls">SSL/TLS</option>
+                <option value="starttls">STARTTLS</option>
+                <option value="none">Sin cifrado</option>
+              </select>
+            </label>
+          </div>
           <label>Carpeta<input name="inbox_folder" value="INBOX"></label>
         </div>
+        <p id="new-mailbox-oauth-note" class="muted" hidden>Se creará desactivado. Después podrás conectar Microsoft sin introducir una contraseña IMAP.</p>
         <div class="mailbox-form-actions" style="margin-top: 14px; border-top: none; padding-top: 0;">
           <button data-loading-text="Guardando...">Añadir buzón</button>
         </div>
@@ -235,4 +245,27 @@
     </section>
   {% endif %}
 </section>
+<script>
+  (() => {
+    const provider = document.getElementById("new-mailbox-provider");
+    const method = document.getElementById("new-mailbox-connection-method");
+    const manualFields = document.getElementById("new-mailbox-manual-fields");
+    const oauthNote = document.getElementById("new-mailbox-oauth-note");
+    if (!provider || !method || !manualFields || !oauthNote) return;
+    const manualInputs = manualFields.querySelectorAll("[data-manual-field]");
+    const syncProfile = () => {
+      const microsoft = provider.value === "microsoft365";
+      method.value = microsoft ? "oauth2" : "password";
+      manualFields.hidden = microsoft;
+      manualFields.style.display = microsoft ? "none" : "";
+      oauthNote.hidden = !microsoft;
+      manualInputs.forEach((input) => {
+        input.disabled = microsoft;
+        input.required = !microsoft;
+      });
+    };
+    provider.addEventListener("change", syncProfile);
+    syncProfile();
+  })();
+</script>
 {% endblock %}

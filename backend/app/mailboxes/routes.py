@@ -107,6 +107,32 @@ def _oauth_feedback(message: str, *, ok: bool = False) -> RedirectResponse:
     return RedirectResponse(f"/settings/mailboxes?{urlencode({key: message})}", status_code=303)
 
 
+def _normalize_new_mailbox_data(data: dict[str, str]) -> tuple[dict[str, str], str]:
+    """Validate the supported creation profiles before applying form fields."""
+    normalized = dict(data)
+    provider = (normalized.get("provider") or "imap").strip().lower()
+    connection_method = (normalized.get("connection_method") or "password").strip().lower()
+    if provider not in {"imap", "gmail", "microsoft365"}:
+        raise ValueError("El proveedor de correo no es válido.")
+    if provider == "microsoft365":
+        if connection_method != "oauth2":
+            raise ValueError("Microsoft 365 requiere OAuth del proveedor.")
+        normalized.update(provider="microsoft365", connection_method="oauth2")
+        normalized.pop("imap_username", None)
+        normalized.pop("imap_password_encrypted", None)
+        normalized.pop("imap_host", None)
+        normalized.pop("imap_port", None)
+        normalized.pop("imap_security", None)
+        return normalized, "microsoft365"
+    if provider == "imap" and connection_method != "password":
+        raise ValueError("IMAP manual requiere usuario y contraseña.")
+    if provider == "gmail" and connection_method not in {"password", "oauth2"}:
+        raise ValueError("El método de autenticación de Gmail no es válido.")
+    normalized["provider"] = provider
+    normalized["connection_method"] = connection_method
+    return normalized, "manual"
+
+
 def _save_mailbox(db: Session, mailbox: Mailbox, data: dict[str, str], user: TenantUser) -> None:
     normalized = {key: data[key] for key in EDIT_FIELDS if key in data}
     update_with_form(mailbox, normalized, SECRET_FIELDS)
@@ -374,6 +400,10 @@ async def create_mailbox(
     if not _can_edit(user):
         return _response(request, {"ok": False, "message": "No tienes permisos para configurar buzones."}, status_code=403)
     data = await _form_data(request)
+    try:
+        data, creation_profile = _normalize_new_mailbox_data(data)
+    except ValueError as exc:
+        return _response(request, {"ok": False, "message": str(exc)}, status_code=400, save_feedback=True)
     email_address = (data.get("email_address") or data.get("connected_email") or data.get("imap_username") or "").strip().lower()
     if not _valid_email(email_address):
         return _response(request, {"ok": False, "message": "Indica una dirección de correo válida."}, status_code=400, save_feedback=True)
@@ -388,6 +418,21 @@ async def create_mailbox(
     db.add(mailbox)
     try:
         _save_mailbox(db, mailbox, data, user)
+        if creation_profile == "microsoft365":
+            mailbox.provider = "microsoft365"
+            mailbox.connection_method = "oauth2"
+            mailbox.imap_host = "outlook.office365.com"
+            mailbox.imap_port = 993
+            mailbox.imap_security = "ssl_tls"
+            mailbox.imap_use_ssl = True
+            mailbox.imap_username = mailbox.email_address
+            mailbox.imap_password_encrypted = None
+            mailbox.access_token_encrypted = None
+            mailbox.refresh_token_encrypted = None
+            mailbox.enabled = False
+            mailbox.auto_sync_enabled = False
+            mailbox.mark_as_read_after_import = False
+            mailbox.smtp_enabled = False
         db.commit()
         db.refresh(mailbox)
     except IntegrityError:
@@ -400,7 +445,11 @@ async def create_mailbox(
     log_action(db, company_id=user.company_id, user=user, action="settings.mailbox.create", entity_type="mailbox", entity_id=mailbox.id, message="Buzón creado")
     return _response(
         request,
-        {"ok": True, "message": "Configuración IMAP guardada correctamente.", "mailbox": serialize_mailbox(mailbox)},
+        {
+            "ok": True,
+            "message": "Buzón Microsoft 365 preparado para conectar." if creation_profile == "microsoft365" else "Configuración IMAP guardada correctamente.",
+            "mailbox": serialize_mailbox(mailbox),
+        },
         redirect="/settings/mailboxes",
         save_feedback=True,
     )
