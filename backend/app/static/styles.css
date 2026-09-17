@@ -418,11 +418,16 @@ label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
 form.stack, .stack { display: grid; gap: 12px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; align-items: end; }
-table { width: 100%; border-collapse: collapse; background: white; border: 1px solid var(--line); border-radius: 8px; overflow: auto; display: block; }
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { width: 100%; border-collapse: collapse; background: white; border: 1px solid var(--line); border-radius: 8px; display: table; }
 table.data-table th, table.data-table td { min-width: 120px; }
 table.data-table .wide-cell { min-width: 260px; max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 thead, tbody, tr { width: 100%; }
 th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table th:not([hidden]), table td:not([hidden]) { display: table-cell; }
+td.actions, th.actions { display: table-cell; }
+td.actions > *, th.actions > * { display: inline-flex; vertical-align: middle; }
+td > .stack-inline, .table-wrap td .stack-inline { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 th { background: #eef3f4; font-size: 13px; color: #415057; }
 tr:last-child td { border-bottom: 0; }
 tbody tr:nth-child(even) { background: #f8fafb; }
@@ -7950,9 +7955,9 @@ dialog.settings-drawer .grid-4-cols {
 .kibak-activity-panel { overflow: hidden; }
 .kibak-activity-panel .kibak-panel-heading { align-items: center; }
 .kibak-table-wrap { overflow-x: auto; }
-.kibak-activity-table { width: 100%; min-width: 720px; border-collapse: collapse; }
-.kibak-activity-table th { padding: 0 12px 10px; color: var(--muted, #64748b); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-align: left; text-transform: uppercase; }
-.kibak-activity-table td { padding: 13px 12px; border-top: 1px solid var(--line, #e2e8f0); color: var(--text, #0f172a); font-size: 13px; vertical-align: middle; }
+.kibak-activity-table { display: table; width: 100%; min-width: 720px; border-collapse: collapse; }
+.kibak-activity-table th { display: table-cell; padding: 0 12px 10px; color: var(--muted, #64748b); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-align: left; text-transform: uppercase; }
+.kibak-activity-table td { display: table-cell; padding: 13px 12px; border-top: 1px solid var(--line, #e2e8f0); color: var(--text, #0f172a); font-size: 13px; vertical-align: middle; }
 .kibak-activity-table th:first-child, .kibak-activity-table td:first-child { padding-left: 0; }
 .kibak-activity-table th:last-child, .kibak-activity-table td:last-child { padding-right: 0; }
 .kibak-sender { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -8211,6 +8216,7 @@ dialog.settings-drawer .grid-4-cols {
   display: table;
   width: 100%;
   min-width: 1080px;
+  border-collapse: collapse;
   border: 0;
   border-radius: 0;
   background: #fff;
@@ -8218,6 +8224,7 @@ dialog.settings-drawer .grid-4-cols {
 }
 
 .communications-table th {
+  display: table-cell;
   padding: 10px 12px;
   background: #f6f9f8;
   color: #607077;
@@ -8228,6 +8235,7 @@ dialog.settings-drawer .grid-4-cols {
 }
 
 .communications-table td {
+  display: table-cell;
   padding: 13px 12px;
   vertical-align: middle;
 }
@@ -8260,7 +8268,19 @@ dialog.settings-drawer .grid-4-cols {
   border-left-color: #22a06b !important;
 }
 
-.communication-date,
+.communication-date {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+td.communication-date,
+.communications-table td.communication-date {
+  display: table-cell;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .communication-secondary {
   display: block;
   color: var(--muted);
