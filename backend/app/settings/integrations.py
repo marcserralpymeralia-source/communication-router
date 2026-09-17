@@ -36,6 +36,7 @@ from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.core.attachment_storage import read_attachment, save_attachment
 from app.mailboxes.google_oauth import GoogleOAuthError, authenticate_google_imap, mailbox_oauth_provider
+from app.mailboxes.microsoft_oauth import MicrosoftOAuthError, authenticate_microsoft_imap
 
 
 logger = logging.getLogger(__name__)
@@ -75,10 +76,25 @@ def _uses_google_oauth(settings: EmailSettings) -> bool:
     return mailbox_oauth_provider(settings) == "google"
 
 
+def _uses_microsoft_oauth(settings: EmailSettings) -> bool:
+    return mailbox_oauth_provider(settings) == "microsoft365"
+
+
+def _uses_oauth(settings: EmailSettings) -> bool:
+    return _uses_google_oauth(settings) or _uses_microsoft_oauth(settings)
+
+
 def _imap_authenticate(client, settings: EmailSettings, password: str | None = None) -> None:
     username = (settings.imap_username or "").strip()
     if _uses_google_oauth(settings):
         authenticate_google_imap(
+            client,
+            username=username,
+            refresh_token_encrypted=settings.refresh_token_encrypted,
+        )
+        return
+    if _uses_microsoft_oauth(settings):
+        authenticate_microsoft_imap(
             client,
             username=username,
             refresh_token_encrypted=settings.refresh_token_encrypted,
@@ -179,7 +195,7 @@ def validate_imap_config(settings: EmailSettings) -> dict:
         return {"ok": False, "error_type": "invalid_configuration", "message": "La configuración IMAP está incompleta."}
     if (settings.imap_security or "").strip().lower() not in {"ssl_tls", "starttls", "none"}:
         return {"ok": False, "error_type": "invalid_configuration", "message": "La configuración SSL/TLS no es válida."}
-    if _uses_google_oauth(settings):
+    if _uses_oauth(settings):
         if not decrypt_secret(settings.refresh_token_encrypted):
             return {"ok": False, "error_type": "oauth_authorization_required", "message": "El buzón todavía no está conectado con Google."}
     else:
@@ -326,7 +342,7 @@ def test_imap_connection(settings: EmailSettings, *, request_id: str | None = No
     if not validation["ok"]:
         return {"ok": False, "error_type": validation["error_type"], "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": validation["message"]}
     password = None
-    if not _uses_google_oauth(settings):
+    if not _uses_oauth(settings):
         password, error_message = _imap_password_status(settings)
         if error_message:
             return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": error_message}
@@ -348,6 +364,9 @@ def test_imap_connection(settings: EmailSettings, *, request_id: str | None = No
         message, error_type = _imap_connection_message(settings, exc)
         _log_imap_test_failure(settings, exc, request_id)
         return {"ok": False, "error_type": error_type or classify_integration_error(exc), "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": message}
+    except (GoogleOAuthError, MicrosoftOAuthError) as exc:
+        _log_imap_test_failure(settings, exc, request_id)
+        return {"ok": False, "error_type": exc.error_type, "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": str(exc)}
     except Exception as exc:  # noqa: BLE001
         message, error_type = _imap_connection_message(settings, exc)
         _log_imap_test_failure(settings, exc, request_id)

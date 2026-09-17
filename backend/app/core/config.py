@@ -134,6 +134,15 @@ class Settings(BaseSettings):
         validation_alias="GOOGLE_OAUTH_SCOPES",
     )
     google_oauth_timeout_seconds: int = Field(default=20, validation_alias="GOOGLE_OAUTH_TIMEOUT_SECONDS")
+    microsoft_oauth_client_id: str = Field(default="", validation_alias="MICROSOFT_OAUTH_CLIENT_ID")
+    microsoft_oauth_client_secret: str = Field(default="", validation_alias="MICROSOFT_OAUTH_CLIENT_SECRET")
+    microsoft_oauth_tenant_id: str = Field(default="common", validation_alias="MICROSOFT_OAUTH_TENANT_ID")
+    microsoft_oauth_redirect_uri: str = Field(default="", validation_alias="MICROSOFT_OAUTH_REDIRECT_URI")
+    microsoft_oauth_scopes: str = Field(
+        default="https://outlook.office.com/IMAP.AccessAsUser.All offline_access openid email",
+        validation_alias="MICROSOFT_OAUTH_SCOPES",
+    )
+    microsoft_oauth_timeout_seconds: int = Field(default=20, validation_alias="MICROSOFT_OAUTH_TIMEOUT_SECONDS")
     meta_app_id: str = Field(default="", validation_alias=AliasChoices("META_APP_ID", "FB_APP_ID"))
     meta_app_secret: str = Field(default="", validation_alias=AliasChoices("META_APP_SECRET", "FB_APP_SECRET"))
     meta_embedded_signup_config_id: str = Field(
@@ -247,6 +256,8 @@ class Settings(BaseSettings):
             raise ValueError("SESSION_MAX_AGE must be greater than zero")
         if self.google_oauth_timeout_seconds <= 0:
             raise ValueError("GOOGLE_OAUTH_TIMEOUT_SECONDS must be greater than zero")
+        if self.microsoft_oauth_timeout_seconds <= 0:
+            raise ValueError("MICROSOFT_OAUTH_TIMEOUT_SECONDS must be greater than zero")
 
         if self.job_poll_interval_seconds is not None:
             self.job_worker_poll_seconds = int(self.job_poll_interval_seconds)

@@ -236,11 +236,16 @@ def authenticate_google_imap(client, *, username: str, refresh_token_encrypted: 
 def mailbox_oauth_provider(mailbox) -> str | None:
     if (getattr(mailbox, "connection_method", "password") or "password").strip().lower() != "oauth2":
         return None
-    return GOOGLE_OAUTH_PROVIDER if (getattr(mailbox, "provider", "") or "").strip().lower() == "gmail" else None
+    provider = (getattr(mailbox, "provider", "") or "").strip().lower()
+    if provider == "gmail":
+        return GOOGLE_OAUTH_PROVIDER
+    if provider == "microsoft365":
+        return "microsoft365"
+    return None
 
 
 def mailbox_oauth_status(mailbox) -> str:
-    if mailbox_oauth_provider(mailbox) != GOOGLE_OAUTH_PROVIDER:
+    if mailbox_oauth_provider(mailbox) not in {GOOGLE_OAUTH_PROVIDER, "microsoft365"}:
         return "not_connected"
     if decrypt_secret(getattr(mailbox, "refresh_token_encrypted", None)):
         return "connected"
