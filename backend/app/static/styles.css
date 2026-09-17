@@ -8822,3 +8822,358 @@ td.communication-date,
 .readiness-row.readiness-warn { border-left-color: #d88a19; }
 .readiness-row.readiness-fail { border-left-color: #c24136; }
 @media (max-width: 680px) { .readiness-row { grid-template-columns: 1fr auto; } .readiness-row p, .readiness-row a { grid-column: 1 / -1; } }
+
+/* ==========================================================================
+   Mailboxes Management Page Styles
+   ========================================================================== */
+.mailboxes-list {
+  display: grid;
+  gap: 16px;
+}
+
+.mailbox-card {
+  background: #ffffff;
+  border: 1px solid var(--line, #dbe2e6);
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.mailbox-card:hover {
+  border-color: #cbd5e1;
+}
+
+.mailbox-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.mailbox-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mailbox-icon-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #e8f1ef;
+  color: var(--accent, #123A32);
+  flex-shrink: 0;
+}
+
+.mailbox-icon-badge .ui-icon {
+  color: var(--accent, #123A32);
+}
+
+
+.mailbox-title-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mailbox-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mailbox-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text, #172026);
+}
+
+.mailbox-provider-tag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #edf2f7;
+  color: #4a5568;
+  letter-spacing: 0.03em;
+}
+
+.mailbox-email {
+  font-size: 12px;
+  color: var(--muted, #63717b);
+}
+
+.mailbox-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mailbox-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mailbox-toolbar form {
+  margin: 0;
+}
+
+.mailbox-toolbar button,
+.mailbox-toolbar .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--line, #dbe2e6);
+  background: #ffffff;
+  color: var(--text, #172026);
+  cursor: pointer;
+  line-height: 1.25;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.mailbox-toolbar button:hover,
+.mailbox-toolbar .button:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+/* Meta Strip - replaces the 8 huge KPI boxes */
+.mailbox-meta-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  background: #f8fafc;
+  border-top: 1px solid var(--line, #dbe2e6);
+  border-bottom: 1px solid var(--line, #dbe2e6);
+  padding: 10px 20px;
+  gap: 12px;
+}
+
+.mailbox-meta-strip div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mailbox-meta-strip span {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted, #63717b);
+}
+
+.mailbox-meta-strip strong {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text, #172026);
+}
+
+.mailbox-notes-bar {
+  padding: 8px 20px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fef3c7;
+  font-size: 11.5px;
+  color: #92400e;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mailbox-notes-bar .ui-icon {
+  flex-shrink: 0;
+}
+
+.mailbox-notes-error {
+  background: #fef2f2;
+  border-color: #fee2e2;
+  color: #991b1b;
+}
+
+/* Collapsible Edit Section */
+.mailbox-config-drawer {
+  border: 0;
+}
+
+.mailbox-config-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 20px;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted, #63717b);
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.mailbox-config-summary:hover {
+  color: var(--text, #172026);
+  background: #f8fafc;
+}
+
+.mailbox-config-summary::marker,
+.mailbox-config-summary::-webkit-details-marker {
+  display: none;
+}
+
+.mailbox-config-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mailbox-config-summary-arrow {
+  transition: transform 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+}
+
+
+.mailbox-config-hint {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.mailbox-config-drawer[open] .mailbox-config-summary-arrow {
+  transform: rotate(90deg);
+}
+
+.mailbox-config-drawer[open] .mailbox-config-summary {
+  border-bottom: 1px solid var(--line, #dbe2e6);
+  background: #f8fafc;
+  color: var(--text, #172026);
+}
+
+.mailbox-form-body {
+  padding: 20px;
+  display: grid;
+  gap: 20px;
+  background: #ffffff;
+}
+
+.mailbox-form-section {
+  display: grid;
+  gap: 10px;
+}
+
+.mailbox-form-section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #334155;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.mailbox-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px 14px;
+}
+
+.mailbox-form-grid label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted, #63717b);
+  font-weight: 600;
+}
+
+.mailbox-form-grid label input,
+.mailbox-form-grid label select {
+  font-weight: normal;
+  height: 32px;
+  min-height: 32px;
+}
+
+.mailbox-checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  margin-top: 18px;
+  font-size: 12px !important;
+  color: var(--text, #172026) !important;
+}
+
+.mailbox-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.mailbox-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--line, #dbe2e6);
+  gap: 10px;
+}
+
+/* Add Mailbox Panel */
+.mailbox-add-card {
+  margin-top: 8px;
+  background: #ffffff;
+  border: 1px solid var(--line, #dbe2e6);
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.mailbox-add-header {
+  margin-bottom: 16px;
+}
+
+.mailbox-add-header h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.mailbox-add-header p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #63717b);
+}
+
+@media (max-width: 768px) {
+  .mailbox-card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .mailbox-header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .mailbox-meta-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
