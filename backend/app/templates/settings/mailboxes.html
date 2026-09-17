@@ -204,6 +204,7 @@
       const microsoft = provider.value === "microsoft365";
       method.value = microsoft ? "oauth2" : "password";
       manualFields.hidden = microsoft;
+      manualFields.style.display = microsoft ? "none" : "";
       oauthNote.hidden = !microsoft;
       manualInputs.forEach((input) => {
         input.disabled = microsoft;

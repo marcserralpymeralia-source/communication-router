@@ -307,6 +307,9 @@ class MailboxFoundationTests(unittest.TestCase):
         self.assertIn('<option value="microsoft365">Microsoft 365 (OAuth)</option>', html)
         self.assertIn('href="/settings/mailboxes/{{ mailbox.id }}/oauth/microsoft/start"', html)
         self.assertIn('id="new-mailbox-manual-fields"', html)
+        self.assertIn('manualFields.style.display = microsoft ? "none" : ""', html)
+        self.assertIn('input.disabled = microsoft', html)
+        self.assertIn('input.required = !microsoft', html)
 
     def test_update_mailbox_does_not_duplicate_or_activate_and_reports_feedback(self):
         with self.tenant_session() as db, self.master_session() as master_db:
