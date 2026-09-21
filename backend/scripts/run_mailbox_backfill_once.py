@@ -241,9 +241,7 @@ def _safe_backfill_result(result: dict) -> dict[str, object]:
     return {key: result.get(key) for key in safe_keys if key in result}
 
 
-def run_backfill_once(args: argparse.Namespace) -> dict[str, object]:
-    settings = get_settings()
-    _validate_runtime(settings)
+def _parse_backfill_range(args: argparse.Namespace) -> tuple[date, date]:
     if args.company_slug != "kibak-pilot":
         raise RuntimeError("El runner solo admite el tenant piloto autorizado.")
     since = date.fromisoformat(args.since)
@@ -252,6 +250,97 @@ def run_backfill_once(args: argparse.Namespace) -> dict[str, object]:
     to = date.fromisoformat(args.to or _today_madrid())
     if to < since:
         raise RuntimeError("La fecha final no puede ser anterior a la fecha mínima.")
+    return since, to
+
+
+def run_backfill_in_context(
+    args: argparse.Namespace,
+    *,
+    settings,
+    master_db,
+    tenant_db,
+    company,
+    mailbox,
+    database_name: str | None,
+) -> dict[str, object]:
+    """Run the one-shot operation using an already authenticated app context."""
+    _validate_runtime(settings)
+    since, to = _parse_backfill_range(args)
+    if database_name != EXPECTED_TENANT_DATABASE:
+        raise RuntimeError("El contexto tenant no apunta a la base autorizada.")
+    validate_mailbox_safety(mailbox)
+
+    llm = tenant_db.scalar(select(LLMSettings).where(LLMSettings.company_id == company.id))
+    policy = load_routing_policy(tenant_db, company.id)
+    if llm is None:
+        raise RuntimeError("No existe LLMSettings para el tenant piloto.")
+    if not policy.simulation_mode or policy.auto_forwarding_enabled:
+        raise RuntimeError("La policy efectiva no cumple simulation=true y forwarding=false.")
+
+    sync_state = get_or_create_mailbox_sync_state(master_db, mailbox, commit=True)
+    if sync_state.enabled:
+        raise RuntimeError("MailboxSyncState no puede estar habilitado durante el backfill.")
+    normal_cursor_before = sync_state.last_seen_uid
+    counts_before = _counts(tenant_db, company.id)
+    started = monotonic()
+    result = _execute_canonical_backfill(
+        tenant_db,
+        mailbox,
+        company.id,
+        since=since.isoformat(),
+        to=to.isoformat(),
+        sync_state=sync_state,
+        master_db=master_db,
+        mailbox_id=mailbox.id,
+    )
+    counts_after = _counts(tenant_db, company.id)
+    master_db.refresh(sync_state)
+    storage = _storage_audit(tenant_db, settings, company.id)
+
+    return {
+        "ok": bool(result.get("ok")),
+        "tenant": {"slug": args.company_slug, "company_id": company.id, "database": EXPECTED_TENANT_DATABASE},
+        "range": {"since": since.isoformat(), "to": to.isoformat()},
+        "mailbox": {
+            "id": mailbox.id,
+            "provider": mailbox.provider,
+            "connection_method": mailbox.connection_method,
+            "enabled": bool(mailbox.enabled),
+            "auto_sync_enabled": bool(mailbox.auto_sync_enabled),
+            "mark_as_read_after_import": bool(mailbox.mark_as_read_after_import),
+            "smtp_enabled": bool(mailbox.smtp_enabled),
+            "imap_readonly": not bool(mailbox.mark_as_read_after_import),
+        },
+        "policy": {
+            "simulation_mode": bool(policy.simulation_mode),
+            "auto_forwarding_enabled": bool(policy.auto_forwarding_enabled),
+        },
+        "backfill": _safe_backfill_result(result),
+        "counts_before": counts_before,
+        "counts_after": counts_after,
+        "count_deltas": _deltas(counts_before, counts_after),
+        "received_range": _received_range(tenant_db, company.id, mailbox.id, since, to),
+        "sync_state": {
+            "enabled": bool(sync_state.enabled),
+            "normal_cursor_unchanged": sync_state.last_seen_uid == normal_cursor_before,
+            "backfill_status": sync_state.backfill_status,
+        },
+        "latency_ms": round((monotonic() - started) * 1000, 1),
+        "storage": storage,
+        "execution": {
+            "canonical_backfill_invocations": 1,
+            "background_worker_started": False,
+            "openai_called": False,
+            "smtp_called": False,
+            "forwarding_called": False,
+        },
+    }
+
+
+def run_backfill_once(args: argparse.Namespace) -> dict[str, object]:
+    settings = get_settings()
+    _validate_runtime(settings)
+    _parse_backfill_range(args)
 
     master_db = MasterSessionLocal()
     tenant_db = None
@@ -292,74 +381,15 @@ def run_backfill_once(args: argparse.Namespace) -> dict[str, object]:
         )
         if len(mailboxes) != 1:
             raise RuntimeError("Debe existir exactamente un buzón Microsoft OAuth para el piloto.")
-        mailbox = mailboxes[0]
-        validate_mailbox_safety(mailbox)
-
-        llm = tenant_db.scalar(select(LLMSettings).where(LLMSettings.company_id == company.id))
-        policy = load_routing_policy(tenant_db, company.id)
-        if llm is None:
-            raise RuntimeError("No existe LLMSettings para el tenant piloto.")
-        if not policy.simulation_mode or policy.auto_forwarding_enabled:
-            raise RuntimeError("La policy efectiva no cumple simulation=true y forwarding=false.")
-
-        sync_state = get_or_create_mailbox_sync_state(master_db, mailbox, commit=True)
-        if sync_state.enabled:
-            raise RuntimeError("MailboxSyncState no puede estar habilitado durante el backfill.")
-        normal_cursor_before = sync_state.last_seen_uid
-        counts_before = _counts(tenant_db, company.id)
-        started = monotonic()
-        result = _execute_canonical_backfill(
-            tenant_db,
-            mailbox,
-            company.id,
-            since=since.isoformat(),
-            to=to.isoformat(),
-            sync_state=sync_state,
+        return run_backfill_in_context(
+            args,
+            settings=settings,
             master_db=master_db,
-            mailbox_id=mailbox.id,
+            tenant_db=tenant_db,
+            company=tenant_company,
+            mailbox=mailboxes[0],
+            database_name=_safe_database_name(database_url),
         )
-        counts_after = _counts(tenant_db, company.id)
-        master_db.refresh(sync_state)
-        storage = _storage_audit(tenant_db, settings, company.id)
-
-        return {
-            "ok": bool(result.get("ok")),
-            "tenant": {"slug": company.slug, "company_id": company.id, "database": EXPECTED_TENANT_DATABASE},
-            "range": {"since": since.isoformat(), "to": to.isoformat()},
-            "mailbox": {
-                "id": mailbox.id,
-                "provider": mailbox.provider,
-                "connection_method": mailbox.connection_method,
-                "enabled": bool(mailbox.enabled),
-                "auto_sync_enabled": bool(mailbox.auto_sync_enabled),
-                "mark_as_read_after_import": bool(mailbox.mark_as_read_after_import),
-                "smtp_enabled": bool(mailbox.smtp_enabled),
-                "imap_readonly": not bool(mailbox.mark_as_read_after_import),
-            },
-            "policy": {
-                "simulation_mode": bool(policy.simulation_mode),
-                "auto_forwarding_enabled": bool(policy.auto_forwarding_enabled),
-            },
-            "backfill": _safe_backfill_result(result),
-            "counts_before": counts_before,
-            "counts_after": counts_after,
-            "count_deltas": _deltas(counts_before, counts_after),
-            "received_range": _received_range(tenant_db, company.id, mailbox.id, since, to),
-            "sync_state": {
-                "enabled": bool(sync_state.enabled),
-                "normal_cursor_unchanged": sync_state.last_seen_uid == normal_cursor_before,
-                "backfill_status": sync_state.backfill_status,
-            },
-            "latency_ms": round((monotonic() - started) * 1000, 1),
-            "storage": storage,
-            "execution": {
-                "canonical_backfill_invocations": 1,
-                "background_worker_started": False,
-                "openai_called": False,
-                "smtp_called": False,
-                "forwarding_called": False,
-            },
-        }
     finally:
         if tenant_db is not None:
             tenant_db.close()

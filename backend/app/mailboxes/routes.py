@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from argparse import Namespace
 import hmac
 from datetime import datetime, timezone
 from email.utils import parseaddr
@@ -14,10 +15,11 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_user
 from app.core.config import effective_email_batch_limit, get_settings
 from app.core.templating import templates
-from app.db.models import Email, InboundMessage, Mailbox
+from app.db.models import Company, Email, InboundMessage, Mailbox
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.mailboxes.service import get_mailbox, get_or_create_mailbox_sync_state, list_mailboxes, serialize_mailbox
+from scripts.run_mailbox_backfill_once import _safe_database_name, run_backfill_in_context
 from app.mailboxes.pilot_sync import run_pilot_sync
 from app.mailboxes.google_oauth import (
     GOOGLE_OAUTH_STATE_SESSION_KEY,
@@ -59,6 +61,7 @@ EDIT_FIELDS = [
 ]
 SECRET_FIELDS = {"imap_password_encrypted", "smtp_password_encrypted"}
 BOOL_FIELDS = {"imap_use_ssl", "auto_sync_enabled", "read_unread_only", "smtp_enabled"}
+BACKFILL_PRODUCTION_CONFIRM = "BACKFILL_PRODUCTION_CONFIRM"
 
 
 def _can_edit(user: TenantUser) -> bool:
@@ -650,6 +653,111 @@ async def backfill_mailbox(
     }
     job = enqueue_job(db, company_id=user.company_id, job_type="backfill_imap", payload=payload, created_by_user_id=user.id)
     return _response(request, {"ok": True, "job_id": job.id, "status": job.status, "mailbox_id": mailbox.id})
+
+
+@router.post("/{mailbox_id}/backfill-once")
+async def administrative_backfill_once(
+    mailbox_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    master_db: Session = Depends(get_master_db),
+    user: TenantUser = Depends(current_user),
+):
+    """Run the one-shot Production backfill inside the authenticated app context."""
+    settings = get_settings()
+    if (
+        settings.environment != "production"
+        or settings.app_slug.strip().lower() != "kibak"
+        or not settings.enable_production_backfill_admin
+    ):
+        return JSONResponse({"ok": False, "message": "Acción administrativa no disponible."}, status_code=404)
+    if not _can_edit(user):
+        return JSONResponse({"ok": False, "message": "No autorizado."}, status_code=403)
+    if user.company_slug != "kibak-pilot":
+        return JSONResponse({"ok": False, "message": "Tenant no autorizado para esta acción."}, status_code=403)
+
+    data = await _form_data(request)
+    if data.get("confirmation") != BACKFILL_PRODUCTION_CONFIRM:
+        return JSONResponse({"ok": False, "message": "Confirmación explícita requerida."}, status_code=400)
+
+    mailboxes = list(
+        db.scalars(
+            select(Mailbox).where(
+                Mailbox.company_id == user.company_id,
+                Mailbox.provider == "microsoft365",
+                Mailbox.connection_method == "oauth2",
+            )
+        ).all()
+    )
+    if len(mailboxes) != 1 or mailboxes[0].id != mailbox_id:
+        return JSONResponse({"ok": False, "message": "El buzón no coincide con el único buzón piloto."}, status_code=409)
+    mailbox = mailboxes[0]
+    company = db.scalar(select(Company).where(Company.id == user.company_id))
+    if company is None:
+        return JSONResponse({"ok": False, "message": "Tenant no disponible."}, status_code=503)
+
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.mailbox.backfill_once.start",
+        entity_type="mailbox",
+        entity_id=mailbox.id,
+        message="Backfill administrativo iniciado",
+        metadata={"since": "2026-09-14", "mode": "one-shot", "tenant": user.company_slug},
+    )
+    args = Namespace(company_slug="kibak-pilot", since="2026-09-14", to=None)
+    try:
+        result = run_backfill_in_context(
+            args,
+            settings=settings,
+            master_db=master_db,
+            tenant_db=db,
+            company=company,
+            mailbox=mailbox,
+            database_name=_safe_database_name(user.database_url),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="settings.mailbox.backfill_once.finish",
+            entity_type="mailbox",
+            entity_id=mailbox.id,
+            message="Backfill administrativo detenido",
+            metadata={"ok": False, "error_type": type(exc).__name__},
+        )
+        return JSONResponse({"ok": False, "message": "Backfill detenido durante la validación o ejecución."}, status_code=409)
+
+    metrics = {
+        "range": result.get("range"),
+        "backfill": result.get("backfill"),
+        "counts_before": result.get("counts_before"),
+        "counts_after": result.get("counts_after"),
+        "count_deltas": result.get("count_deltas"),
+        "received_range": result.get("received_range"),
+        "storage": result.get("storage"),
+        "safety": {
+            "auto_process": False,
+            "simulation_mode": result.get("policy", {}).get("simulation_mode"),
+            "auto_forwarding": result.get("policy", {}).get("auto_forwarding_enabled"),
+            "background_worker_started": result.get("execution", {}).get("background_worker_started"),
+            "openai_called": result.get("execution", {}).get("openai_called"),
+            "routing_jobs_enqueued": result.get("backfill", {}).get("routing_jobs_enqueued", 0),
+        },
+    }
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.mailbox.backfill_once.finish",
+        entity_type="mailbox",
+        entity_id=mailbox.id,
+        message="Backfill administrativo finalizado",
+        metadata={"ok": bool(result.get("ok")), "metrics": metrics},
+    )
+    return JSONResponse({"ok": bool(result.get("ok")), "metrics": metrics}, status_code=200 if result.get("ok") else 409)
 
 
 @router.post("/{mailbox_id}/delete")

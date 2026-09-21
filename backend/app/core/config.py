@@ -191,6 +191,7 @@ class Settings(BaseSettings):
     branding_favicon_url: str = ""
     release_sha: str = Field(default="unknown", validation_alias="RELEASE_SHA")
     run_workers_in_web: bool | None = Field(default=None, validation_alias="RUN_WORKERS_IN_WEB")
+    enable_production_backfill_admin: bool = Field(default=False, validation_alias="ENABLE_PRODUCTION_BACKFILL_ADMIN")
     storage_backend: str = Field(default="local", validation_alias="STORAGE_BACKEND")
     s3_endpoint_url: str | None = Field(default=None, validation_alias="S3_ENDPOINT_URL")
     s3_bucket: str | None = Field(default=None, validation_alias="S3_BUCKET")
