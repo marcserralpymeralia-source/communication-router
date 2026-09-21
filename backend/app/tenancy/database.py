@@ -62,10 +62,16 @@ def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
     from app.migrations.kibak_baseline import KIBAK_TENANT_BASELINE_VERSION, KIBAK_TENANT_TABLES
     from app.migrations.registry import CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM, CURRENT_KIBAK_TENANT_SCHEMA_NAME, CURRENT_KIBAK_TENANT_SCHEMA_VERSION
 
+    transition_versions = frozenset({"2026.09.17.1", "2026.09.18.1"})
+    compatible_versions = frozenset({
+        KIBAK_TENANT_BASELINE_VERSION,
+        CURRENT_KIBAK_TENANT_SCHEMA_VERSION,
+        *transition_versions,
+    })
+
     table_names = set(inspect(engine).get_table_names())
     missing_tables = sorted(KIBAK_TENANT_TABLES - table_names)
     unexpected_tables = sorted(table_names - KIBAK_TENANT_TABLES)
-    schema_matches = not missing_tables and not unexpected_tables
     with engine.connect() as conn:
         row = conn.execute(
             text(
@@ -77,20 +83,26 @@ def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
             ),
             {"company_id": company_id},
         ).mappings().first()
-    valid_versions = {KIBAK_TENANT_BASELINE_VERSION, CURRENT_KIBAK_TENANT_SCHEMA_VERSION}
-    if row is None or row["version"] not in valid_versions:
+    if row is None or row["version"] not in compatible_versions:
         version = row["version"] if row else None
         raise RuntimeError(f"Version desconocida en schema_migrations: {version}")
+    is_transition = row["version"] in transition_versions
     evolved = row["version"] == CURRENT_KIBAK_TENANT_SCHEMA_VERSION
-    expected_checksum = CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM if evolved else KIBAK_TENANT_BASELINE_VERSION
+    schema_matches = not missing_tables and (is_transition or not unexpected_tables)
+    expected_checksum = (
+        row["checksum"]
+        if is_transition
+        else CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM if evolved else KIBAK_TENANT_BASELINE_VERSION
+    )
+    checksum_valid = bool(row["checksum"]) if is_transition else row["checksum"] in {None, expected_checksum}
     return {
         **dict(row),
         "missing_tables": missing_tables,
         "unexpected_tables": unexpected_tables,
         "current_version": row["version"],
-        "current_name": CURRENT_KIBAK_TENANT_SCHEMA_NAME if evolved else "KIBAK tenant baseline",
+        "current_name": row["name"] if is_transition else CURRENT_KIBAK_TENANT_SCHEMA_NAME if evolved else "KIBAK tenant baseline",
         "current_checksum": expected_checksum,
-        "is_current": schema_matches and row["status"] == "current" and row["checksum"] in {None, expected_checksum},
+        "is_current": schema_matches and row["status"] == "current" and checksum_valid,
     }
 
 

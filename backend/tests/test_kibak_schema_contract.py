@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
@@ -19,7 +19,12 @@ from app.migrations.kibak_baseline import (
     KIBAK_TENANT_TABLES,
     create_kibak_tenant_schema,
 )
-from app.migrations.registry import KIBAK_TENANT_SCHEMA_MIGRATIONS, CURRENT_KIBAK_TENANT_SCHEMA_VERSION
+from app.migrations.registry import (
+    CURRENT_KIBAK_MASTER_SCHEMA_VERSION,
+    CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM,
+    CURRENT_KIBAK_TENANT_SCHEMA_VERSION,
+    KIBAK_TENANT_SCHEMA_MIGRATIONS,
+)
 from app.migrations.runner import run_migration_plan
 from app.tenancy.database import _validate_kibak_baseline
 from app.tenancy.migrations import tenant_migration_report
@@ -75,6 +80,63 @@ class KibakSchemaContractTests(unittest.TestCase):
             report = _validate_kibak_baseline(engine, 7)
             self.assertFalse(report["is_current"])
             self.assertEqual(report["missing_tables"], ["worker_heartbeats"])
+
+    def test_transition_bridge_accepts_only_explicit_tenant_versions(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            engine = create_engine(f"sqlite:///{Path(tempdir, 'tenant.db')}")
+            self.engines.append(engine)
+            create_kibak_tenant_schema(
+                engine,
+                company_id=7,
+                company_name="KIBAK Test",
+                confirmation=KIBAK_BASELINE_CONFIRMATION,
+            )
+            Session = sessionmaker(bind=engine)
+            for version in ("2026.09.08.3",):
+                with Session.begin() as db:
+                    state = db.scalar(
+                        select(TenantSchemaMigration)
+                        .where(TenantSchemaMigration.company_id == 7)
+                        .order_by(TenantSchemaMigration.id.desc())
+                    )
+                    state.version = version
+                    state.name = f"tenant migration {version}"
+                    state.checksum = CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM
+                    state.status = "current"
+                report = _validate_kibak_baseline(engine, 7)
+                self.assertTrue(report["is_current"], version)
+
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE routing_decision_destinations (id INTEGER PRIMARY KEY)"))
+
+            for version in ("2026.09.17.1", "2026.09.18.1"):
+                with Session.begin() as db:
+                    state = db.scalar(
+                        select(TenantSchemaMigration)
+                        .where(TenantSchemaMigration.company_id == 7)
+                        .order_by(TenantSchemaMigration.id.desc())
+                    )
+                    state.version = version
+                    state.name = f"tenant migration {version}"
+                    state.checksum = f"checksum-{version}"
+                    state.status = "current"
+                report = _validate_kibak_baseline(engine, 7)
+                self.assertTrue(report["is_current"], version)
+
+            with Session.begin() as db:
+                state = db.scalar(
+                    select(TenantSchemaMigration)
+                    .where(TenantSchemaMigration.company_id == 7)
+                    .order_by(TenantSchemaMigration.id.desc())
+                )
+                state.version = "2026.09.19.1"
+                state.name = "unknown"
+                state.checksum = "checksum-unknown"
+            with self.assertRaisesRegex(RuntimeError, "Version desconocida"):
+                _validate_kibak_baseline(engine, 7)
+
+    def test_bridge_does_not_change_master_schema_version_contract(self):
+        self.assertEqual(CURRENT_KIBAK_MASTER_SCHEMA_VERSION, "2026.09.16.1")
 
     def test_incremental_kibak_migrations_upgrade_previous_baseline(self):
         with tempfile.TemporaryDirectory() as tempdir:
