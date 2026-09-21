@@ -64,6 +64,7 @@ def _s3_client():
     settings = get_settings()
     try:
         import boto3
+        from botocore.config import Config
     except ImportError as exc:  # pragma: no cover - exercised by deployment checks
         raise RuntimeError("S3 storage requires the boto3 dependency") from exc
     secret = getattr(settings, "s3_secret_access_key", None)
@@ -73,6 +74,7 @@ def _s3_client():
         region_name=getattr(settings, "s3_region", "auto") or "auto",
         aws_access_key_id=getattr(settings, "s3_access_key_id", None),
         aws_secret_access_key=secret.get_secret_value() if secret else None,
+        config=Config(s3={"addressing_style": "path"}),
     )
 
 

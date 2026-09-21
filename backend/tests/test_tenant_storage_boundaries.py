@@ -1,17 +1,48 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock, patch
 
 from app.core.attachment_storage import TenantStorageError, delete_attachment, read_attachment, save_attachment
 from app.settings.branding import branding_asset_storage_ref, branding_asset_url, is_internal_brand_asset, store_brand_asset
 
 
 class TenantStorageTests(unittest.TestCase):
+    def test_s3_client_uses_path_style_addressing(self):
+        from app.core import attachment_storage
+
+        settings = SimpleNamespace(
+            s3_bucket="kibak-attachments",
+            s3_endpoint_url="https://objects.example.test",
+            s3_region="eu-central-1",
+            s3_access_key_id="access",
+            s3_secret_access_key=SimpleNamespace(get_secret_value=lambda: "secret"),
+        )
+        class FakeConfig:
+            def __init__(self, **kwargs):
+                self.s3 = kwargs["s3"]
+
+        client = Mock(return_value=object())
+        boto3_module = ModuleType("boto3")
+        boto3_module.client = client
+        botocore_module = ModuleType("botocore")
+        botocore_config_module = ModuleType("botocore.config")
+        botocore_config_module.Config = FakeConfig
+        botocore_module.config = botocore_config_module
+        with patch("app.core.attachment_storage.get_settings", return_value=settings), patch.dict(
+            sys.modules,
+            {"boto3": boto3_module, "botocore": botocore_module, "botocore.config": botocore_config_module},
+        ):
+            attachment_storage._s3_client()
+
+        self.assertEqual(client.call_args.args, ("s3",))
+        self.assertEqual(client.call_args.kwargs["config"].s3["addressing_style"], "path")
+
     def test_local_storage_requires_tenant_and_rejects_cross_tenant_access(self):
         with tempfile.TemporaryDirectory() as tempdir, patch.dict(os.environ, {"STORAGE_BACKEND": "local"}, clear=False), patch(
             "app.core.attachment_storage.resolve_temp_storage_dir", return_value=Path(tempdir) / "attachments"
