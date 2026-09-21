@@ -366,13 +366,18 @@ class Department(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     knowledge_items: Mapped[list["DepartmentKnowledge"]] = relationship(
-        back_populates="department", passive_deletes=True
+        back_populates="department",
+        foreign_keys="DepartmentKnowledge.department_id",
+        passive_deletes=True,
     )
     members: Mapped[list["DepartmentMember"]] = relationship(
         back_populates="department", passive_deletes=True
     )
     raci_assignments: Mapped[list["RaciAssignment"]] = relationship(
         back_populates="department", passive_deletes=True
+    )
+    routing_decision_destinations: Mapped[list["RoutingDecisionDestination"]] = relationship(
+        back_populates="department", passive_deletes=True, overlaps="destinations,routing_decision"
     )
 
     __table_args__ = (UniqueConstraint("company_id", "name"), UniqueConstraint("company_id", "id"))
@@ -390,16 +395,29 @@ class DepartmentKnowledge(Base):
     title: Mapped[str] = mapped_column(String(200))
     content: Mapped[str] = mapped_column(Text)
     knowledge_type: Mapped[str] = mapped_column(String(30), index=True)
+    related_department_id: Mapped[int | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), index=True
+    )
+    priority: Mapped[str] = mapped_column(String(10), default="NORMAL", index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    department: Mapped[Department] = relationship(back_populates="knowledge_items")
+    department: Mapped[Department] = relationship(
+        back_populates="knowledge_items", foreign_keys=[department_id]
+    )
+    related_department: Mapped[Department | None] = relationship(
+        foreign_keys=[related_department_id]
+    )
 
     __table_args__ = (
         CheckConstraint(
             "knowledge_type IN ('responsibility', 'exclusion', 'example', 'exception', 'guideline')",
             name="ck_department_knowledge_type",
+        ),
+        CheckConstraint(
+            "priority IN ('CRITICAL', 'HIGH', 'NORMAL', 'LOW')",
+            name="ck_department_knowledge_priority",
         ),
         UniqueConstraint("department_id", "title", "knowledge_type"),
     )
@@ -497,6 +515,10 @@ class RoutingDecision(Base):
     communication_id: Mapped[int] = mapped_column(Integer, index=True)
     department_id: Mapped[int | None] = mapped_column(Integer, index=True)
     alternative_department_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    runner_up_department_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    runner_up_confidence: Mapped[float | None] = mapped_column(Float)
+    decision_margin: Mapped[float | None] = mapped_column(Float)
+    evidence_ids_json: Mapped[str | None] = mapped_column(Text)
     final_department_id: Mapped[int | None] = mapped_column(Integer, index=True)
     category: Mapped[str] = mapped_column(String(100))
     final_category: Mapped[str | None] = mapped_column(String(100))
@@ -513,6 +535,13 @@ class RoutingDecision(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     communication: Mapped[Communication] = relationship(back_populates="routing_decisions")
+    destinations: Mapped[list["RoutingDecisionDestination"]] = relationship(
+        back_populates="routing_decision",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="RoutingDecisionDestination.position, RoutingDecisionDestination.id",
+        overlaps="routing_decision_destinations,department",
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -547,6 +576,46 @@ class RoutingDecision(Base):
         ),
         UniqueConstraint("company_id", "id"),
         UniqueConstraint("company_id", "communication_id", "analysis_number"),
+    )
+
+
+class RoutingDecisionDestination(Base):
+    __tablename__ = "routing_decision_destinations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    routing_decision_id: Mapped[int] = mapped_column(Integer, index=True)
+    department_id: Mapped[int] = mapped_column(Integer, index=True)
+    role: Mapped[str] = mapped_column(String(20), default="primary", index=True)
+    position: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    routing_decision: Mapped[RoutingDecision] = relationship(
+        back_populates="destinations", overlaps="routing_decision_destinations,department"
+    )
+    department: Mapped[Department] = relationship(
+        back_populates="routing_decision_destinations", overlaps="destinations,routing_decision"
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("company_id", "routing_decision_id"),
+            ("routing_decisions.company_id", "routing_decisions.id"),
+            name="fk_routing_destination_decision_company",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("company_id", "department_id"),
+            ("departments.company_id", "departments.id"),
+            name="fk_routing_destination_department_company",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "role IN ('primary', 'operational', 'responsible', 'accountable', 'consulted', 'informed')",
+            name="ck_routing_destination_role",
+        ),
+        CheckConstraint("position >= 1", name="ck_routing_destination_position"),
+        UniqueConstraint("company_id", "routing_decision_id", "department_id", "role"),
     )
 
 
@@ -680,6 +749,8 @@ class RoutingEvaluationCase(Base):
     cc_recipients: Mapped[str | None] = mapped_column(Text)
     attachment_text: Mapped[str | None] = mapped_column(Text)
     expected_department_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    expected_destinations_json: Mapped[str] = mapped_column(Text, default="[]")
+    expected_raci_json: Mapped[str] = mapped_column(Text, default="[]")
     expected_category: Mapped[str | None] = mapped_column(String(100))
     expected_requires_review: Mapped[bool] = mapped_column(Boolean, default=True)
     criticality: Mapped[str] = mapped_column(String(20), default="normal")
@@ -763,6 +834,11 @@ class RoutingEvaluationResult(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0)
     reason: Mapped[str | None] = mapped_column(Text)
     alternative_department_id: Mapped[int | None] = mapped_column(Integer)
+    expected_destinations_json: Mapped[str] = mapped_column(Text, default="[]")
+    expected_raci_json: Mapped[str] = mapped_column(Text, default="[]")
+    predicted_destinations_json: Mapped[str] = mapped_column(Text, default="[]")
+    additional_destinations_correct: Mapped[bool] = mapped_column(Boolean, default=False)
+    raci_match: Mapped[bool] = mapped_column(Boolean, default=False)
     correct_department: Mapped[bool | None] = mapped_column(Boolean)
     auto_route_candidate: Mapped[bool] = mapped_column(Boolean, default=False)
     false_auto_route: Mapped[bool] = mapped_column(Boolean, default=False)

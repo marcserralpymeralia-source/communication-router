@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.attachment_extraction import extract_attachment_text
 from app.core.attachment_storage import save_attachment
-from app.db.models import Communication, CommunicationAttachment, Department, RoutingAction, RoutingDecision
+from app.db.models import Communication, CommunicationAttachment, Department, RoutingAction, RoutingDecision, RoutingDecisionDestination
 
 PROCESSING_STATUSES = {"received", "parsing", "processed", "error"}
 ROUTING_STATUSES = {
@@ -99,12 +99,25 @@ def _communication_filters(
                 Department.name.ilike(pattern),
             )
         )
+        additional_department_match = exists(
+            select(RoutingDecisionDestination.id)
+            .join(RoutingDecision, RoutingDecision.id == RoutingDecisionDestination.routing_decision_id)
+            .join(Department, Department.id == RoutingDecisionDestination.department_id)
+            .where(
+                RoutingDecisionDestination.company_id == company_id,
+                RoutingDecision.company_id == company_id,
+                RoutingDecision.communication_id == Communication.id,
+                Department.company_id == company_id,
+                Department.name.ilike(pattern),
+            )
+        )
         filters.append(
             or_(
                 Communication.sender_email.ilike(pattern),
                 Communication.sender_name.ilike(pattern),
                 Communication.subject.ilike(pattern),
                 department_match,
+                additional_department_match,
             )
         )
     if workbench_filter in WORKBENCH_FILTERS and workbench_filter != "all":

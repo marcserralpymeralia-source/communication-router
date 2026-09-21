@@ -22,6 +22,8 @@ from app.db.models import (
     RoutingEvaluationSet,
 )
 from app.departments.service import build_department_routing_context, list_departments
+from app.routing.decision_context import build_routing_decision_context
+from app.routing.destinations import normalize_destination_specs, validate_destination_specs
 from app.routing.evaluation_dataset import synthetic_cases
 from app.routing.service import (
     DEFAULT_ROUTING_THRESHOLDS,
@@ -44,6 +46,33 @@ def _loads(value: str | None, default: Any) -> Any:
         return json.loads(value or "")
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_expected_raci(db: Session, company_id: int, items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    active_ids = set(
+        db.scalars(
+            select(Department.id).where(
+                Department.company_id == company_id,
+                Department.active.is_(True),
+            )
+        ).all()
+    )
+    allowed_roles = {"responsible", "accountable", "consulted", "informed"}
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for item in items or []:
+        department_id = item.get("department_id")
+        role = str(item.get("role") or "").strip().lower()
+        if department_id not in active_ids:
+            raise ValueError("RACI department does not belong to an active department in this tenant")
+        if role not in allowed_roles:
+            raise ValueError(f"Unsupported expected RACI role: {role}")
+        key = (department_id, role)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({"department_id": department_id, "role": role})
+    return normalized
 
 
 def _now() -> datetime:
@@ -130,6 +159,8 @@ def create_evaluation_case(
     cc_recipients: str | None = None,
     attachment_text: str | None = None,
     expected_department_id: int | None = None,
+    expected_destinations: list[dict[str, Any]] | None = None,
+    expected_raci: list[dict[str, Any]] | None = None,
     expected_category: str | None = None,
     expected_requires_review: bool = True,
     criticality: str = "normal",
@@ -148,6 +179,17 @@ def create_evaluation_case(
         )
     ) is None:
         raise ValueError("El departamento esperado no pertenece a este tenant.")
+    try:
+        normalized_destinations = validate_destination_specs(
+            db,
+            company_id,
+            expected_department_id,
+            None,
+            expected_destinations,
+        )
+        normalized_raci = _normalize_expected_raci(db, company_id, expected_raci)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     case = RoutingEvaluationCase(
         company_id=company_id,
         evaluation_set_id=set_id,
@@ -159,6 +201,8 @@ def create_evaluation_case(
         cc_recipients=cc_recipients.strip() if cc_recipients else None,
         attachment_text=attachment_text.strip() if attachment_text else None,
         expected_department_id=expected_department_id,
+        expected_destinations_json=_json(normalized_destinations),
+        expected_raci_json=_json(normalized_raci),
         expected_category=expected_category.strip() if expected_category else None,
         expected_requires_review=expected_requires_review,
         criticality=criticality,
@@ -183,6 +227,8 @@ def update_evaluation_case(
     sender: str | None = None,
     attachment_text: str | None = None,
     expected_department_id: int | None = None,
+    expected_destinations: list[dict[str, Any]] | None = None,
+    expected_raci: list[dict[str, Any]] | None = None,
     expected_category: str | None = None,
     expected_requires_review: bool | None = None,
     criticality: str | None = None,
@@ -218,6 +264,22 @@ def update_evaluation_case(
         raise ValueError("El departamento esperado no pertenece a este tenant.")
     if expected_department_id is not None:
         case.expected_department_id = expected_department_id
+    if expected_destinations is not None or expected_raci is not None:
+        effective_primary = case.expected_department_id
+        normalized_destinations = validate_destination_specs(
+            db,
+            company_id,
+            effective_primary,
+            None,
+            expected_destinations if expected_destinations is not None else _loads(case.expected_destinations_json, []),
+        )
+        normalized_raci = _normalize_expected_raci(
+            db,
+            company_id,
+            expected_raci if expected_raci is not None else _loads(case.expected_raci_json, []),
+        )
+        case.expected_destinations_json = _json(normalized_destinations)
+        case.expected_raci_json = _json(normalized_raci)
     if expected_category is not None:
         case.expected_category = expected_category.strip() or None
     if expected_requires_review is not None:
@@ -341,17 +403,18 @@ def playground_analysis(
         input_reference="playground:transient",
         allow_disabled=provider_call is not None,
     )
+    decision_context = build_routing_decision_context(db, company_id, communication)
     proposal = classify_communication(
         db,
         company_id,
         communication,
         runtime,
-        routing_context=evaluation_context(db, company_id),
+        routing_context=decision_context,
     )
     return {
         "proposal": proposal.model_dump(mode="json"),
         "prompt_execution": runtime.last_result or {},
-        "context": evaluation_context(db, company_id),
+        "context": decision_context,
         "mailbox": mailbox.email_address,
     }
 
@@ -362,6 +425,29 @@ def _auto_candidate(predicted: int | None, requires_review: bool, confidence: fl
         and not requires_review
         and confidence >= DEFAULT_ROUTING_THRESHOLDS.auto_route_confidence
     )
+
+
+def _destination_signature(primary_id: int | None, primary_role: str, additional: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    values = []
+    if primary_id is not None:
+        values.append({"department_id": primary_id, "role": primary_role, "position": 1})
+    values.extend(
+        {
+            "department_id": item["department_id"],
+            "role": item["role"],
+            "position": item.get("position", index + 2),
+        }
+        for index, item in enumerate(additional)
+    )
+    return values
+
+
+def _raci_signature(destinations: list[dict[str, Any]]) -> set[tuple[int, str]]:
+    return {
+        (int(item["department_id"]), str(item["role"]))
+        for item in destinations
+        if item.get("role") in {"responsible", "accountable", "consulted", "informed"}
+    }
 
 
 def calculate_metrics(results: list[RoutingEvaluationResult]) -> dict[str, Any]:
@@ -380,6 +466,8 @@ def calculate_metrics(results: list[RoutingEvaluationResult]) -> dict[str, Any]:
         predicted_key = str(item.predicted_department_id) if item.predicted_department_id is not None else "unclassified"
         matrix.setdefault(expected_key, {})[predicted_key] = matrix.setdefault(expected_key, {}).get(predicted_key, 0) + 1
     critical_false = [item for item in false_auto if item.criticality == "critical"]
+    destination_cases = classified
+    raci_cases = classified
     return {
         "total_cases": total,
         "completed_cases": len(classified),
@@ -394,6 +482,16 @@ def calculate_metrics(results: list[RoutingEvaluationResult]) -> dict[str, Any]:
         "confidence_error": round(sum(error_confidence) / len(error_confidence), 4) if error_confidence else None,
         "critical_false_auto_routes": len(critical_false),
         "confusion_matrix": matrix,
+        "additional_destination_accuracy": (
+            round(sum(bool(item.additional_destinations_correct) for item in destination_cases) / len(destination_cases), 4)
+            if destination_cases else None
+        ),
+        "additional_destination_cases": len(destination_cases),
+        "raci_match_rate": (
+            round(sum(bool(item.raci_match) for item in raci_cases) / len(raci_cases), 4)
+            if raci_cases else None
+        ),
+        "raci_cases": len(raci_cases),
     }
 
 
@@ -516,8 +614,21 @@ def run_evaluation(
         predicted = proposal.proposed_department_id if proposal else None
         confidence = float(proposal.confidence) if proposal else 0.0
         requires_review = bool(proposal.requires_review) if proposal else True
+        predicted_destinations = _destination_signature(
+            predicted,
+            proposal.primary_role if proposal else "operational",
+            proposal.additional_destinations if proposal else [],
+        )
+        expected_destinations = _loads(case.expected_destinations_json, [])
+        expected_raci = _loads(case.expected_raci_json, [])
+        predicted_raci = _raci_signature(predicted_destinations)
+        expected_raci_signature = _raci_signature(expected_raci)
         auto_route = _auto_candidate(predicted, requires_review, confidence)
         correct_department = None if case.expected_department_id is None else predicted == case.expected_department_id
+        additional_destinations_correct = [
+            item for item in predicted_destinations if item["position"] > 1
+        ] == expected_destinations
+        raci_match = predicted_raci == expected_raci_signature
         db.add(
             RoutingEvaluationResult(
                 company_id=company_id,
@@ -533,6 +644,11 @@ def run_evaluation(
                 confidence=confidence,
                 reason=proposal.reason if proposal else None,
                 alternative_department_id=proposal.alternative_department_id if proposal else None,
+                expected_destinations_json=_json(expected_destinations),
+                expected_raci_json=_json(expected_raci),
+                predicted_destinations_json=_json(predicted_destinations),
+                additional_destinations_correct=additional_destinations_correct,
+                raci_match=raci_match,
                 correct_department=correct_department,
                 auto_route_candidate=auto_route,
                 false_auto_route=bool(auto_route and case.expected_department_id != predicted),

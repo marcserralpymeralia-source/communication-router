@@ -19,18 +19,24 @@ PromptProvider = Callable[[Any, list[dict], str], dict]
 
 ROUTING_PROMPT_PURPOSE = "communication_department_routing"
 ROUTING_PROMPT_FALLBACK = (
-    "Eres el agente de routing de comunicaciones de una empresa. Tu tarea exclusiva es "
-    "proponer el departamento mas apropiado usando unicamente el contexto organizativo proporcionado.\n\n"
-    "Interpreta la intencion semantica completa. No clasifiques por palabras clave aisladas. "
-    "Considera responsabilidades, exclusiones, ejemplos, excepciones y asignaciones RACI del contexto. "
-    "Una incidencia puede pertenecer a un departamento aunque su nombre no aparezca literalmente. "
-    "Respeta las exclusiones y no inventes departamentos ni IDs.\n\n"
-    "Solo puedes devolver IDs incluidos en el contexto. Si no existe evidencia suficiente, devuelve null. "
-    "En casos ambiguos conserva una alternativa razonable, explica la ambiguedad y marca requires_review=true. "
-    "La confianza debe expresar la evidencia disponible, no una certeza artificial.\n\n"
-    "Devuelve exclusivamente un objeto JSON valido con exactamente estos campos: "
+    "Actuas como clasificador de comunicaciones. Determina que departamento debe ejecutar "
+    "la accion principal requerida por el remitente, no solo el tema del correo.\n\n"
+    "Usa exclusivamente el contexto enviado y no clasifiques por palabras clave aisladas. "
+    "Prioriza en este orden: excepciones aplicables, directrices y fronteras entre candidatos, "
+    "accion principal, exclusiones, responsabilidades, ejemplos y descripcion general. "
+    "Una regla explicita prevalece sobre una coincidencia terminologica. Compara el candidato "
+    "principal con el segundo candidato plausible y conserva la continuidad del thread salvo "
+    "evidencia clara de cambio de intencion.\n\n"
+    "No inventes departamentos, reglas ni IDs. Los evidence_ids solo pueden ser IDs K presentes "
+    "en el contexto. Si falta evidencia, devuelve null y requires_review=true. No muestres "
+    "razonamiento interno; reason debe ser breve y auditable. Si la comunicación requiere "
+    "participación real de otros departamentos, usa additional_destinations con department_id, "
+    "role y position. No uses runner_up para destinos reales: runner_up es solo la segunda "
+    "hipótesis por incertidumbre. Si no hay un destino adicional claro, devuelve una lista vacía.\n\n"
+    "Devuelve exclusivamente JSON valido con estos campos obligatorios: "
     "proposed_department_id, category, confidence, requires_review, reason, "
-    "alternative_department_id y ambiguity_reason."
+    "alternative_department_id y ambiguity_reason. Puedes incluir opcionalmente "
+    "runner_up_department_id, runner_up_confidence, decision_margin, intent y evidence_ids."
 )
 
 
@@ -108,6 +114,12 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
                 "alternative_department_id",
                 "ambiguity_reason",
             ],
+            "properties": {
+                "additional_destinations": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                },
+            },
         },
         "fallback": ROUTING_PROMPT_FALLBACK,
         "input_limit": 30000,
@@ -346,7 +358,16 @@ def validate_prompt_output(purpose: str, content: str) -> PromptValidationResult
             "alternative_department_id",
             "ambiguity_reason",
         }
-        extra_fields = sorted(set(data) - expected_fields)
+        optional_fields = {
+            "runner_up_department_id",
+            "runner_up_confidence",
+            "decision_margin",
+            "intent",
+            "evidence_ids",
+            "primary_role",
+            "additional_destinations",
+        }
+        extra_fields = sorted(set(data) - expected_fields - optional_fields)
         missing_fields = sorted(expected_fields - set(data))
         if extra_fields or missing_fields:
             details = []
@@ -360,6 +381,44 @@ def validate_prompt_output(purpose: str, content: str) -> PromptValidationResult
             value = data[field]
             if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
                 return PromptValidationResult(status="schema_error", data=data, errors=[f"{field} debe ser entero o null."])
+        if "runner_up_department_id" in data and data["runner_up_department_id"] is not None and (
+            not isinstance(data["runner_up_department_id"], int) or isinstance(data["runner_up_department_id"], bool)
+        ):
+            return PromptValidationResult(status="schema_error", data=data, errors=["runner_up_department_id debe ser entero o null."])
+        for field in ("runner_up_confidence", "decision_margin"):
+            if field in data and data[field] is not None and (
+                not isinstance(data[field], (int, float)) or isinstance(data[field], bool)
+            ):
+                return PromptValidationResult(status="schema_error", data=data, errors=[f"{field} debe ser numerico o null."])
+        if "runner_up_confidence" in data and data["runner_up_confidence"] is not None and not 0 <= float(data["runner_up_confidence"]) <= 1:
+            return PromptValidationResult(status="schema_error", data=data, errors=["runner_up_confidence debe estar entre 0 y 1."])
+        if "decision_margin" in data and data["decision_margin"] is not None and not -1 <= float(data["decision_margin"]) <= 1:
+            return PromptValidationResult(status="schema_error", data=data, errors=["decision_margin debe estar entre -1 y 1."])
+        if "intent" in data and data["intent"] is not None and not isinstance(data["intent"], str):
+            return PromptValidationResult(status="schema_error", data=data, errors=["intent debe ser texto o null."])
+        if "evidence_ids" in data and (
+            not isinstance(data["evidence_ids"], list)
+            or len(data["evidence_ids"]) > 10
+            or not all(isinstance(item, str) and re.fullmatch(r"K[0-9]+", item) for item in data["evidence_ids"])
+        ):
+            return PromptValidationResult(status="schema_error", data=data, errors=["evidence_ids debe ser una lista de IDs K validos."])
+        if "primary_role" in data and data["primary_role"] not in {"operational", "responsible", "accountable"}:
+            return PromptValidationResult(status="schema_error", data=data, errors=["primary_role no es valido."])
+        if "additional_destinations" in data:
+            destinations = data["additional_destinations"]
+            if not isinstance(destinations, list) or len(destinations) > 10:
+                return PromptValidationResult(status="schema_error", data=data, errors=["additional_destinations debe ser una lista de hasta 10 elementos."])
+            for destination in destinations:
+                if not isinstance(destination, dict):
+                    return PromptValidationResult(status="schema_error", data=data, errors=["Cada destino adicional debe ser un objeto."])
+                if set(destination) - {"department_id", "role", "position"}:
+                    return PromptValidationResult(status="schema_error", data=data, errors=["Un destino adicional contiene campos no permitidos."])
+                if not isinstance(destination.get("department_id"), int) or isinstance(destination.get("department_id"), bool):
+                    return PromptValidationResult(status="schema_error", data=data, errors=["department_id adicional debe ser entero."])
+                if destination.get("role") not in {"operational", "responsible", "accountable", "consulted", "informed"}:
+                    return PromptValidationResult(status="schema_error", data=data, errors=["role adicional no es valido."])
+                if not isinstance(destination.get("position"), int) or isinstance(destination.get("position"), bool) or destination["position"] < 2:
+                    return PromptValidationResult(status="schema_error", data=data, errors=["position adicional debe ser entero >= 2."])
         if not isinstance(data["category"], str) or not data["category"].strip():
             return PromptValidationResult(status="schema_error", data=data, errors=["category debe ser texto no vacio."])
         confidence = data["confidence"]

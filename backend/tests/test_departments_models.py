@@ -57,7 +57,10 @@ class DepartmentModelTests(unittest.TestCase):
         )
         self.assertEqual(
             set(DepartmentKnowledge.__table__.columns.keys()),
-            {"id", "department_id", "title", "content", "knowledge_type", "active", "created_at", "updated_at"},
+            {
+                "id", "department_id", "title", "content", "knowledge_type",
+                "related_department_id", "priority", "active", "created_at", "updated_at",
+            },
         )
         self.assertEqual(
             set(DepartmentMember.__table__.columns.keys()),

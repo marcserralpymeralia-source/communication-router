@@ -34,6 +34,7 @@ from app.departments.service import (
     update_department_knowledge,
     update_department_member,
     update_raci_assignment,
+    KNOWLEDGE_PRIORITIES,
 )
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
@@ -79,6 +80,15 @@ async def _form_data(request: Request) -> dict[str, str]:
 
 def _truthy(value: str | None, *, default: bool = False) -> bool:
     return str(value).lower() in {"1", "true", "on", "yes", "si", "sí"} if value is not None else default
+
+
+def _optional_int(value: str | None) -> int | None:
+    if not value or not value.strip():
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError("Related department must be a valid department") from exc
 
 
 def _valid_email(value: str | None) -> bool:
@@ -140,6 +150,8 @@ def _detail_context(request: Request, db: Session, user: TenantUser, department)
         "available_users": available_users,
         "all_users": _tenant_users(db, user.company_id),
         "knowledge_types": KNOWLEDGE_TYPES,
+        "knowledge_priorities": tuple((item, item.title()) for item in KNOWLEDGE_PRIORITIES),
+        "related_departments": [item for item in list_departments(db, user.company_id) if item.id != department.id],
         "raci_roles": RACI_ROLES,
         "can_edit": _can_edit(user),
         "message": request.query_params.get("message"),
@@ -209,7 +221,7 @@ def department_detail(department_id: int, request: Request, db: Session = Depend
             {
                 "ok": True,
                 "department": _summary(db, department),
-                "knowledge": [{"id": item.id, "title": item.title, "content": item.content, "knowledge_type": item.knowledge_type, "active": item.active} for item in context["knowledge"]],
+                "knowledge": [{"id": item.id, "title": item.title, "content": item.content, "knowledge_type": item.knowledge_type, "active": item.active, "related_department_id": item.related_department_id, "priority": item.priority} for item in context["knowledge"]],
                 "members": [{"id": item.id, "user_id": item.user_id, "role": item.role, "active": item.active} for item in context["members"]],
                 "raci": [{"id": item.id, "scope": item.scope, "role": item.raci_role, "user_id": item.user_id, "active": item.active} for item in context["raci"]],
             }
@@ -282,7 +294,17 @@ async def create_knowledge_route(department_id: int, request: Request, db: Sessi
         message = "El conocimiento necesita un título y un contenido descriptivo."
         return _response(request, {"ok": False, "message": message}, redirect=_redirect(f"/departments/{department_id}", error=message), status_code=400)
     try:
-        item = create_department_knowledge(db, user.company_id, department_id, title=data.get("title", ""), content=data.get("content", ""), knowledge_type=data.get("knowledge_type", ""), active=_truthy(data.get("active"), default=True))
+        item = create_department_knowledge(
+            db,
+            user.company_id,
+            department_id,
+            title=data.get("title", ""),
+            content=data.get("content", ""),
+            knowledge_type=data.get("knowledge_type", ""),
+            related_department_id=_optional_int(data.get("related_department_id")),
+            priority=data.get("priority") or None,
+            active=_truthy(data.get("active"), default=True),
+        )
     except (ValueError, IntegrityError) as exc:
         db.rollback()
         message = "El conocimiento necesita título, contenido y un tipo válido." if isinstance(exc, ValueError) else _friendly_error(exc)
@@ -302,7 +324,17 @@ async def update_knowledge_route(department_id: int, knowledge_id: int, request:
         message = "El conocimiento necesita un título y un contenido descriptivo."
         return _response(request, {"ok": False, "message": message}, redirect=_redirect(f"/departments/{department_id}", error=message), status_code=400)
     try:
-        item = update_department_knowledge(db, user.company_id, knowledge_id, title=data.get("title", ""), content=data.get("content", ""), knowledge_type=data.get("knowledge_type", ""), active=_truthy(data.get("active")))
+        item = update_department_knowledge(
+            db,
+            user.company_id,
+            knowledge_id,
+            title=data.get("title", ""),
+            content=data.get("content", ""),
+            knowledge_type=data.get("knowledge_type", ""),
+            related_department_id=_optional_int(data.get("related_department_id")),
+            priority=data.get("priority") or None,
+            active=_truthy(data.get("active")),
+        )
     except (ValueError, IntegrityError) as exc:
         db.rollback()
         message = "Selecciona un tipo de conocimiento válido." if isinstance(exc, ValueError) else _friendly_error(exc)

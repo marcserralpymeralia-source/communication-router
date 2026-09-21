@@ -8,9 +8,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.database import Base
-from app.db.models import Communication, CommunicationAttachment, Company, Department, Mailbox
+from app.db.models import Communication, CommunicationAttachment, Company, Department, Mailbox, RoutingDecision
 from app.routing.service import (
     RoutingValidationError,
+    analyze_communication,
     classify_communication,
 )
 
@@ -156,7 +157,7 @@ class RoutingServiceTests(unittest.TestCase):
             prompt = json.loads(runtime.user_prompt)
             self.assertEqual(prompt["communication"]["body_text"], "Seguimos sin recibir lo que tenia que llegar ayer.")
             self.assertIn("Incidencias de entrega", json.dumps(prompt["organization"], ensure_ascii=False))
-            self.assertIn("No clasifiques por palabras clave aisladas", runtime.system_prompt)
+            self.assertIn("no clasifiques por palabras clave aisladas", runtime.system_prompt)
 
     def test_exclusion_context_is_sent_and_does_not_force_administration(self):
         with self.session_factory() as db:
@@ -316,6 +317,76 @@ class RoutingServiceTests(unittest.TestCase):
             self.assertEqual(payload["recipients"]["cc"], ["copia@a.test"])
             self.assertEqual(payload["attachments"][0]["filename"], "detalle.txt")
             self.assertEqual(payload["attachments"][0]["extracted_text"], "Detalle extraible del adjunto")
+
+    def test_valid_runner_up_and_evidence_are_accepted(self):
+        with self.session_factory() as db:
+            communication = self._communication(db, subject="Entrega", body="Reclamo un retraso")
+            runtime = FakeRoutingRuntime({
+                "proposed_department_id": 11,
+                "category": "incidencia",
+                "confidence": 0.91,
+                "requires_review": False,
+                "reason": "La directriz de frontera aplica.",
+                "alternative_department_id": None,
+                "ambiguity_reason": None,
+                "runner_up_department_id": 10,
+                "runner_up_confidence": 0.42,
+                "decision_margin": 0.49,
+                "intent": "delivery_incident",
+                "evidence_ids": ["K1"],
+            })
+            context = self._context(
+                self._department(10, "Comercial"),
+                self._department(11, "Logistica"),
+            ) | {"knowledge": [{"evidence_id": "K1"}]}
+
+            result = classify_communication(db, 1, communication, runtime, routing_context=context)
+
+            self.assertEqual(result.runner_up_department_id, 10)
+            self.assertEqual(result.decision_margin, 0.49)
+            self.assertEqual(result.evidence_ids, ["K1"])
+
+    def test_invented_evidence_id_is_rejected(self):
+        with self.session_factory() as db:
+            communication = self._communication(db, subject="Entrega", body="Reclamo un retraso")
+            runtime = FakeRoutingRuntime({
+                "proposed_department_id": 11,
+                "category": "incidencia",
+                "confidence": 0.91,
+                "requires_review": False,
+                "reason": "Respuesta insegura.",
+                "alternative_department_id": None,
+                "ambiguity_reason": None,
+                "evidence_ids": ["K999"],
+            })
+            context = self._context(self._department(11, "Logistica")) | {"knowledge": [{"evidence_id": "K1"}]}
+
+            with self.assertRaisesRegex(RoutingValidationError, "evidence_ids"):
+                classify_communication(db, 1, communication, runtime, routing_context=context)
+
+    def test_analysis_persists_runner_up_margin_and_evidence(self):
+        with self.session_factory() as db:
+            communication = self._communication(db, subject="Entrega", body="Reclamo un retraso")
+            runtime = FakeRoutingRuntime({
+                "proposed_department_id": 11,
+                "category": "incidencia",
+                "confidence": 0.91,
+                "requires_review": False,
+                "reason": "La directriz de frontera aplica.",
+                "alternative_department_id": None,
+                "ambiguity_reason": None,
+                "runner_up_department_id": 10,
+                "runner_up_confidence": 0.42,
+                "evidence_ids": ["K1"],
+            })
+            context = self._context(self._department(10, "Comercial"), self._department(11, "Logistica")) | {"knowledge": [{"evidence_id": "K1"}]}
+
+            decision = analyze_communication(db, 1, communication.id, runtime, routing_context=context)
+
+            self.assertEqual(decision.runner_up_department_id, 10)
+            self.assertAlmostEqual(decision.decision_margin, 0.49)
+            self.assertEqual(decision.evidence_ids_json, '["K1"]')
+            self.assertIsNotNone(db.get(RoutingDecision, decision.id))
 
 
 if __name__ == "__main__":

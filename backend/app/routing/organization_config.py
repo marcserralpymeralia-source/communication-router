@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Department, DepartmentKnowledge, RaciAssignment
+from app.departments.service import KNOWLEDGE_PRIORITIES
 
 
 CONFIG_VERSION = "kibak.organization.v1"
@@ -28,7 +29,15 @@ def export_organization_config(db: Session, company_id: int) -> dict[str, Any]:
             for item in departments
         ],
         "knowledge": [
-            {"department_name": next((department.name for department in departments if department.id == item.department_id), None), "title": item.title, "content": item.content, "knowledge_type": item.knowledge_type, "active": item.active}
+            {
+                "department_name": next((department.name for department in departments if department.id == item.department_id), None),
+                "related_department_name": next((department.name for department in departments if department.id == item.related_department_id), None),
+                "title": item.title,
+                "content": item.content,
+                "knowledge_type": item.knowledge_type,
+                "priority": item.priority,
+                "active": item.active,
+            }
             for item in knowledge
         ],
         "raci": [
@@ -62,6 +71,12 @@ def validate_organization_config(payload: Any) -> dict[str, Any]:
         knowledge_type = str(item.get("knowledge_type") or "").strip().lower()
         if knowledge_type not in KNOWLEDGE_TYPES:
             raise OrganizationConfigError(f"Tipo de knowledge no válido: {knowledge_type or 'vacío'}.")
+        priority = str(item.get("priority") or "").strip().upper()
+        if priority and priority not in KNOWLEDGE_PRIORITIES:
+            raise OrganizationConfigError(f"Prioridad de knowledge no válida: {priority}.")
+        related_name = str(item.get("related_department_name") or "").strip().lower()
+        if related_name and related_name not in names:
+            raise OrganizationConfigError("La relación de departamento no es válida.")
     return payload
 
 
@@ -99,7 +114,15 @@ def apply_organization_config(db: Session, company_id: int, payload: Any) -> dic
         department = departments[str(item["department_name"]).strip().lower()]
         existing = db.scalar(select(DepartmentKnowledge).where(DepartmentKnowledge.department_id == department.id, DepartmentKnowledge.title == item["title"], DepartmentKnowledge.knowledge_type == item["knowledge_type"]))
         if existing is None:
-            db.add(DepartmentKnowledge(department_id=department.id, title=item["title"], content=item["content"], knowledge_type=item["knowledge_type"], active=bool(item.get("active", True))))
+            existing = DepartmentKnowledge(department_id=department.id, title=item["title"], knowledge_type=item["knowledge_type"])
+            db.add(existing)
+        related_name = str(item.get("related_department_name") or "").strip().lower()
+        related_department = departments.get(related_name) if related_name else None
+        existing.content = item["content"]
+        existing.active = bool(item.get("active", True))
+        if item.get("priority"):
+            existing.priority = item["priority"]
+        existing.related_department_id = related_department.id if related_department else None
     for item in validated["raci"]:
         department = departments[str(item["department_name"]).strip().lower()]
         existing = db.scalar(select(RaciAssignment).where(RaciAssignment.company_id == company_id, RaciAssignment.department_id == department.id, RaciAssignment.scope == item["scope"], RaciAssignment.raci_role == item["raci_role"], RaciAssignment.user_id.is_(None)))

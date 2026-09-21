@@ -77,7 +77,7 @@ class RoutingLLMRuntimeTests(unittest.TestCase):
             self.assertEqual(result["validated_content"]["proposed_department_id"], 10)
             self.assertEqual(calls[0][2], "tenant-routing-model")
             self.assertIn("responsabilidades", calls[0][1][0]["content"])
-            self.assertIn("RACI", calls[0][1][0]["content"])
+            self.assertNotIn("RACI", calls[0][1][0]["content"])
             self.assertEqual(calls[0][1][1]["content"], "contexto")
             self.assertEqual(result["prompt_purpose"], "communication_department_routing")
             self.assertEqual(result["prompt_version"], 1)

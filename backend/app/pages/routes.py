@@ -24,6 +24,7 @@ from app.db.models import (
     RoutingAction,
     RoutingCorrection,
     RoutingDecision,
+    RoutingDecisionDestination,
     ScoringSettings,
 )
 from app.dashboard.service import _customer_suggestion_maps, _load_order_line_metrics, email_workbench_item, load_order_view_data, order_workbench_item, suggest_customer_for_email
@@ -92,6 +93,11 @@ def _kibak_history_context(
         RoutingDecision.status != "superseded",
     )
     if department_id:
+        additional_destination_scope = select(RoutingDecisionDestination.id).where(
+            RoutingDecisionDestination.company_id == Communication.company_id,
+            RoutingDecisionDestination.routing_decision_id == RoutingDecision.id,
+            RoutingDecisionDestination.department_id == department_id,
+        )
         filters.append(
             exists(
                 decision_scope.where(
@@ -99,6 +105,7 @@ def _kibak_history_context(
                         RoutingDecision.department_id == department_id,
                         RoutingDecision.alternative_department_id == department_id,
                         RoutingDecision.final_department_id == department_id,
+                        exists(additional_destination_scope),
                     )
                 )
             )

@@ -77,6 +77,16 @@
           <strong>{{ row.proposed_department.name if row.proposed_department else "Sin departamento" }}</strong>
           {% if row.final_department and row.final_department.id != (row.proposed_department.id if row.proposed_department else none) %}<span class="analysis-final-destination">Final: {{ row.final_department.name }}</span>{% endif %}
         </div>
+        {% if row.additional_destinations %}
+          <div class="analysis-additional-destinations">
+            <span class="communication-field-label">También intervienen</span>
+            <ul>
+              {% for destination in row.additional_destinations if destination.department %}
+                <li><strong>{{ destination.department.name }}</strong><span>· {{ destination.role_label }}</span></li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
         <div class="analysis-confidence {% if decision.confidence >= 0.9 %}confidence-high{% elif decision.confidence >= 0.7 %}confidence-medium{% else %}confidence-low{% endif %}">
           <div><span class="communication-field-label">Confianza</span><strong>{{ row.confidence_label }} <small>{% if decision.confidence >= 0.9 %}Alta{% elif decision.confidence >= 0.7 %}Media{% else %}Baja{% endif %}</small></strong></div>
           <div class="confidence-track"><span style="width: {{ (decision.confidence * 100)|round(0)|int }}%"></span></div>

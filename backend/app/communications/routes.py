@@ -14,6 +14,7 @@ from app.core.pagination import normalize_page
 from app.db.models import Department, Mailbox, RoutingAction, RoutingCorrection, RoutingDecision, User
 from app.master.service import TenantUser
 from app.routing.auto import enqueue_forwarding_for_decision
+from app.routing.destinations import DESTINATION_ROLE_LABELS, load_decision_destinations
 from app.routing.forwarding import current_forward_action, serialize_forward_action
 from app.routing.service import (
     RoutingValidationError,
@@ -101,6 +102,7 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
     decisions_by_communication: dict[int, list] = {}
     for decision in decisions:
         decisions_by_communication.setdefault(decision.communication_id, []).append(decision)
+    destinations_by_decision = load_decision_destinations(db, company_id, [item.id for item in decisions])
     action_rows = db.scalars(
         select(RoutingAction)
         .where(
@@ -122,6 +124,11 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
         )
         if department_id is not None
     }
+    department_ids.update(
+        destination.department_id
+        for destinations in destinations_by_decision.values()
+        for destination in destinations
+    )
     departments = {
         department.id: department
         for department in db.scalars(
@@ -136,6 +143,17 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
         communication_decisions = decisions_by_communication.get(communication.id, [])
         decision = next((item for item in communication_decisions if item.status != "superseded"), None)
         action = actions_by_communication.get(communication.id)
+        destinations = destinations_by_decision.get(decision.id, []) if decision else []
+        additional_destinations = [
+            {
+                "department": departments.get(destination.department_id),
+                "role": destination.role,
+                "role_label": DESTINATION_ROLE_LABELS.get(destination.role, destination.role),
+                "position": destination.position,
+            }
+            for destination in destinations
+            if destination.position > 1 or destination.department_id != (decision.department_id if decision else None)
+        ]
         status_key, status_label, status_class = _workbench_status(communication, decision, action)
         rows.append(
             {
@@ -152,6 +170,8 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
                 "confidence_label": f"{decision.confidence:.0%}" if decision else "—",
                 "decisions": communication_decisions,
                 "departments": departments,
+                "destinations": destinations,
+                "additional_destinations": additional_destinations,
             }
         )
     return rows
@@ -271,6 +291,7 @@ def communications_workbench(
             "search": search_value,
             "filter_options": WORKBENCH_FILTER_OPTIONS,
             "forwarding_status_labels": FORWARDING_STATUS_LABELS,
+            "destination_role_labels": DESTINATION_ROLE_LABELS,
             "pagination": {
                 "page": page,
                 "page_size": page_size,

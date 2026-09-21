@@ -6,7 +6,14 @@ from app.db.models import TenantSchemaMigration
 from app.master.models import MasterSchemaMigration
 from sqlalchemy import inspect, text
 
-from app.migrations.helpers import checksum_text, ensure_columns, ensure_unique_index
+from app.migrations.helpers import (
+    checksum_text,
+    ensure_columns,
+    ensure_index,
+    ensure_postgresql_check_constraint,
+    ensure_postgresql_foreign_key,
+    ensure_unique_index,
+)
 from app.migrations.runner import MigrationSpec, registry_checksum
 
 
@@ -572,6 +579,8 @@ DEPARTMENT_KNOWLEDGE_COLUMNS = {
     "title": "VARCHAR(200)",
     "content": "TEXT",
     "knowledge_type": "VARCHAR(30)",
+    "related_department_id": "INTEGER",
+    "priority": "VARCHAR(10) DEFAULT 'NORMAL'",
     "active": "BOOLEAN DEFAULT true",
     "created_at": "TIMESTAMP WITH TIME ZONE",
     "updated_at": "TIMESTAMP WITH TIME ZONE",
@@ -601,6 +610,10 @@ ROUTING_DECISION_COLUMNS = {
     "communication_id": "INTEGER",
     "department_id": "INTEGER",
     "alternative_department_id": "INTEGER",
+    "runner_up_department_id": "INTEGER",
+    "runner_up_confidence": "DOUBLE PRECISION",
+    "decision_margin": "DOUBLE PRECISION",
+    "evidence_ids_json": "TEXT",
     "final_department_id": "INTEGER",
     "category": "VARCHAR(100)",
     "final_category": "VARCHAR(100)",
@@ -1301,6 +1314,127 @@ def _apply_tenant_pre_pilot_controls(engine, dry_run: bool) -> list[str]:  # noq
     )
 
 
+def _apply_tenant_routing_knowledge_enrichment(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add editable routing boundaries and decision trace fields incrementally."""
+
+    actions = []
+    actions.extend(
+        ensure_columns(
+            engine,
+            "department_knowledge",
+            {
+                "related_department_id": "INTEGER",
+                "priority": "VARCHAR(10) DEFAULT 'NORMAL'",
+            },
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_index(
+            engine,
+            "department_knowledge",
+            "ix_department_knowledge_related_department_id",
+            ("related_department_id",),
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_index(
+            engine,
+            "department_knowledge",
+            "ix_department_knowledge_priority",
+            ("priority",),
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_postgresql_foreign_key(
+            engine,
+            "department_knowledge",
+            ("related_department_id",),
+            "departments",
+            ("id",),
+            "fk_department_knowledge_related_department",
+            ondelete="RESTRICT",
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_postgresql_check_constraint(
+            engine,
+            "department_knowledge",
+            "ck_department_knowledge_priority",
+            "priority IN ('CRITICAL', 'HIGH', 'NORMAL', 'LOW')",
+            required_fragments=("priority", "CRITICAL", "HIGH", "NORMAL", "LOW"),
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_columns(
+            engine,
+            "routing_decisions",
+            {
+                "runner_up_department_id": "INTEGER",
+                "runner_up_confidence": "DOUBLE PRECISION",
+                "decision_margin": "DOUBLE PRECISION",
+                "evidence_ids_json": "TEXT",
+            },
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_index(
+            engine,
+            "routing_decisions",
+            "ix_routing_decisions_runner_up_department_id",
+            ("runner_up_department_id",),
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
+def _apply_tenant_routing_destinations(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add normalized decision destinations and evaluation expectations additively."""
+
+    from app.db.models import RoutingDecisionDestination
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        tables = set(inspect(conn).get_table_names())
+    table_name = "routing_decision_destinations"
+    if table_name not in tables:
+        actions.append(f"CREATE TABLE {table_name} (...)")
+        if not dry_run:
+            RoutingDecisionDestination.__table__.create(bind=engine, checkfirst=True)
+    actions.extend(
+        ensure_columns(
+            engine,
+            "routing_evaluation_cases",
+            {
+                "expected_destinations_json": "TEXT DEFAULT '[]'",
+                "expected_raci_json": "TEXT DEFAULT '[]'",
+            },
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_columns(
+            engine,
+            "routing_evaluation_results",
+            {
+                "expected_destinations_json": "TEXT DEFAULT '[]'",
+                "predicted_destinations_json": "TEXT DEFAULT '[]'",
+                "expected_raci_json": "TEXT DEFAULT '[]'",
+                "additional_destinations_correct": "BOOLEAN DEFAULT false",
+                "raci_match": "BOOLEAN DEFAULT false",
+            },
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
 def _apply_tenant_routing_evaluations(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import (
         RoutingEvaluationCase,
@@ -1483,11 +1617,38 @@ TENANT_SCHEMA_MIGRATIONS = [
         checksum=checksum_text("tenant", "worker_heartbeats", "worker_kind", "last_heartbeat_at"),
         upgrade=_apply_tenant_worker_heartbeats,
     ),
+    MigrationSpec(
+        version="2026.09.17.1",
+        name="tenant routing knowledge enrichment",
+        checksum=checksum_text(
+            "tenant",
+            "routing_knowledge_enrichment",
+            "department_knowledge.related_department_id",
+            "department_knowledge.priority",
+            "routing_decisions.runner_up",
+            "routing_decisions.margin",
+            "routing_decisions.evidence_ids",
+        ),
+        upgrade=_apply_tenant_routing_knowledge_enrichment,
+    ),
+    MigrationSpec(
+        version="2026.09.18.1",
+        name="tenant normalized routing destinations",
+        checksum=checksum_text(
+            "tenant",
+            "routing_decision_destinations",
+            "routing_evaluation_case.destination_expectations",
+            "routing_evaluation_result.destination_metrics",
+        ),
+        upgrade=_apply_tenant_routing_destinations,
+    ),
 ]
 
 # KIBAK starts from the clean baseline and only advances through KIBAK migrations.
 KIBAK_TENANT_SCHEMA_MIGRATIONS = [
-    spec for spec in TENANT_SCHEMA_MIGRATIONS if spec.version in {"2026.09.08.1", "2026.09.08.2", "2026.09.08.3"}
+    spec
+    for spec in TENANT_SCHEMA_MIGRATIONS
+    if spec.version in {"2026.09.08.1", "2026.09.08.2", "2026.09.08.3", "2026.09.17.1", "2026.09.18.1"}
 ]
 
 MASTER_SCHEMA_MIGRATIONS = [

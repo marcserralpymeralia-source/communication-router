@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, func, inspect, select, text
@@ -24,8 +25,8 @@ from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER
 from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, MasterSchemaMigration, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
-from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings  # noqa: E402
+from app.migrations.helpers import ensure_postgresql_foreign_key, table_exists  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_routing_destinations, _apply_tenant_routing_knowledge_enrichment  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
 
@@ -117,6 +118,213 @@ class SchemaMigrationTests(unittest.TestCase):
         with self.tenant_engine.begin() as conn:
             conn.execute(text("CREATE TABLE misc (id INTEGER PRIMARY KEY, label TEXT)"))
             conn.execute(text("INSERT INTO misc (id, label) VALUES (1, 'orphan')"))
+
+    def _seed_legacy_routing_enrichment_schema(self, *, related_column: bool = False) -> None:
+        related_sql = ", related_department_id INTEGER" if related_column else ""
+        with self.tenant_engine.begin() as conn:
+            conn.execute(text("CREATE TABLE departments (id INTEGER PRIMARY KEY, company_id INTEGER, name VARCHAR(150))"))
+            conn.execute(
+                text(
+                    "CREATE TABLE department_knowledge ("
+                    "id INTEGER PRIMARY KEY, department_id INTEGER, title VARCHAR(200), content TEXT, "
+                    f"knowledge_type VARCHAR(30){related_sql}, active BOOLEAN)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE TABLE routing_decisions ("
+                    "id INTEGER PRIMARY KEY, company_id INTEGER, communication_id INTEGER, department_id INTEGER, "
+                    "category VARCHAR(100), confidence FLOAT, reason TEXT)"
+                )
+            )
+            conn.execute(text("INSERT INTO departments (id, company_id, name) VALUES (1, 7, 'Comercial'), (2, 7, 'Logística')"))
+            related_value = ", 2" if related_column else ""
+            conn.execute(
+                text(
+                    "INSERT INTO department_knowledge "
+                    "(id, department_id, title, content, knowledge_type, active"
+                    f"{', related_department_id' if related_column else ''}) "
+                    f"VALUES (1, 1, 'Presupuestos', 'Precios y condiciones', 'responsibility', 1{related_value})"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO routing_decisions "
+                    "(id, company_id, communication_id, department_id, category, confidence, reason) "
+                    "VALUES (1, 7, 10, 1, 'commercial', 0.8, 'legacy')"
+                )
+            )
+
+    def test_routing_enrichment_adds_legacy_indexes_and_preserves_data(self):
+        self._seed_legacy_routing_enrichment_schema(related_column=True)
+
+        actions = _apply_tenant_routing_knowledge_enrichment(self.tenant_engine, dry_run=False)
+
+        indexes = {
+            index["name"]: tuple(index["column_names"])
+            for index in inspect(self.tenant_engine).get_indexes("department_knowledge")
+        }
+        indexes.update(
+            {
+                index["name"]: tuple(index["column_names"])
+                for index in inspect(self.tenant_engine).get_indexes("routing_decisions")
+            }
+        )
+        self.assertEqual(indexes["ix_department_knowledge_related_department_id"], ("related_department_id",))
+        self.assertEqual(indexes["ix_department_knowledge_priority"], ("priority",))
+        self.assertEqual(indexes["ix_routing_decisions_runner_up_department_id"], ("runner_up_department_id",))
+        self.assertIn("CREATE INDEX", "\n".join(actions))
+
+        with self.tenant_engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT department_id, related_department_id, priority FROM department_knowledge WHERE id = 1")
+            ).one()
+            decision = conn.execute(text("SELECT category FROM routing_decisions WHERE id = 1")).scalar_one()
+        self.assertEqual(tuple(row), (1, 2, "NORMAL"))
+        self.assertEqual(decision, "commercial")
+
+    def test_routing_enrichment_is_idempotent_and_does_not_add_undeclared_sqlite_constraints(self):
+        self._seed_legacy_routing_enrichment_schema()
+
+        first_actions = _apply_tenant_routing_knowledge_enrichment(self.tenant_engine, dry_run=False)
+        second_actions = _apply_tenant_routing_knowledge_enrichment(self.tenant_engine, dry_run=False)
+
+        self.assertTrue(first_actions)
+        self.assertEqual(second_actions, [])
+        self.assertEqual(inspect(self.tenant_engine).get_check_constraints("department_knowledge"), [])
+        self.assertEqual(inspect(self.tenant_engine).get_foreign_keys("department_knowledge"), [])
+        with self.tenant_engine.connect() as conn:
+            self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM department_knowledge")).scalar_one(), 1)
+
+    def test_sqlite_legacy_migration_uses_additive_columns_and_keeps_priority_default(self):
+        self._seed_legacy_routing_enrichment_schema()
+
+        _apply_tenant_routing_knowledge_enrichment(self.tenant_engine, dry_run=False)
+
+        with self.tenant_engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO department_knowledge "
+                    "(id, department_id, title, content, knowledge_type, active) "
+                    "VALUES (2, 2, 'Entregas', 'Incidencias', 'responsibility', 1)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO department_knowledge "
+                    "(id, department_id, title, content, knowledge_type, active, priority) "
+                    "VALUES (3, 2, 'Nota opcional', 'Sin prioridad', 'guideline', 1, NULL)"
+                )
+            )
+        with self.tenant_engine.connect() as conn:
+            self.assertEqual(conn.execute(text("SELECT priority FROM department_knowledge WHERE id = 2")).scalar_one(), "NORMAL")
+            self.assertIsNone(conn.execute(text("SELECT priority FROM department_knowledge WHERE id = 3")).scalar_one())
+            self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM department_knowledge")).scalar_one(), 3)
+
+    def test_routing_destinations_migration_creates_fresh_table_and_legacy_columns(self):
+        with self.tenant_engine.begin() as conn:
+            conn.execute(text("CREATE TABLE routing_evaluation_cases (id INTEGER PRIMARY KEY, title TEXT)"))
+            conn.execute(text("CREATE TABLE routing_evaluation_results (id INTEGER PRIMARY KEY, status TEXT)"))
+
+        first_actions = _apply_tenant_routing_destinations(self.tenant_engine, dry_run=False)
+        second_actions = _apply_tenant_routing_destinations(self.tenant_engine, dry_run=False)
+
+        self.assertTrue(any("routing_decision_destinations" in action for action in first_actions))
+        self.assertEqual(second_actions, [])
+        tables = set(inspect(self.tenant_engine).get_table_names())
+        self.assertIn("routing_decision_destinations", tables)
+        columns = {
+            column["name"]
+            for column in inspect(self.tenant_engine).get_columns("routing_evaluation_cases")
+        }
+        self.assertTrue({"expected_destinations_json", "expected_raci_json"}.issubset(columns))
+        result_columns = {
+            column["name"]
+            for column in inspect(self.tenant_engine).get_columns("routing_evaluation_results")
+        }
+        self.assertTrue(
+            {
+                "expected_destinations_json",
+                "expected_raci_json",
+                "predicted_destinations_json",
+                "additional_destinations_correct",
+                "raci_match",
+            }.issubset(result_columns)
+        )
+        self.assertEqual(len(inspect(self.tenant_engine).get_check_constraints("routing_decision_destinations")), 2)
+        self.assertEqual(len(inspect(self.tenant_engine).get_foreign_keys("routing_decision_destinations")), 3)
+
+    def test_postgresql_foreign_key_ddl_and_orphan_guard_are_safe(self):
+        class _Result:
+            def __init__(self, value):
+                self.value = value
+
+            def scalar_one(self):
+                return self.value
+
+        class _Connection:
+            def __init__(self, engine):
+                self.engine = engine
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, statement):
+                sql = str(statement)
+                self.engine.executed.append(sql)
+                if sql.startswith("SELECT COUNT(*)"):
+                    return _Result(self.engine.orphan_count)
+                return _Result(None)
+
+        class _Engine:
+            dialect = type("Dialect", (), {"name": "postgresql"})()
+
+            def __init__(self, orphan_count):
+                self.orphan_count = orphan_count
+                self.executed = []
+
+            def connect(self):
+                return _Connection(self)
+
+            def begin(self):
+                return _Connection(self)
+
+        inspector = SimpleNamespace(
+            get_table_names=lambda: ["departments", "department_knowledge"],
+            get_columns=lambda _table: [{"name": "related_department_id"}],
+            get_foreign_keys=lambda _table: [],
+        )
+        engine = _Engine(orphan_count=0)
+        with patch("app.migrations.helpers.inspect", return_value=inspector):
+            actions = ensure_postgresql_foreign_key(
+                engine,
+                "department_knowledge",
+                ("related_department_id",),
+                "departments",
+                ("id",),
+                "fk_department_knowledge_related_department",
+                ondelete="RESTRICT",
+            )
+        self.assertEqual(len(actions), 1)
+        self.assertIn("ON DELETE RESTRICT", actions[0])
+        self.assertIn("ALTER TABLE department_knowledge ADD CONSTRAINT", engine.executed[-1])
+
+        orphan_engine = _Engine(orphan_count=1)
+        with patch("app.migrations.helpers.inspect", return_value=inspector):
+            with self.assertRaisesRegex(RuntimeError, r"valor\(es\) huérfano\(s\)"):
+                ensure_postgresql_foreign_key(
+                    orphan_engine,
+                    "department_knowledge",
+                    ("related_department_id",),
+                    "departments",
+                    ("id",),
+                    "fk_department_knowledge_related_department",
+                    ondelete="RESTRICT",
+                )
+        self.assertEqual(len([sql for sql in orphan_engine.executed if sql.startswith("ALTER TABLE")]), 0)
 
     def _seed_legacy_messages_schema(self) -> None:
         with self.tenant_engine.begin() as conn:

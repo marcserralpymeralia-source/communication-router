@@ -116,7 +116,7 @@ class DepartmentIsolationAuditTests(unittest.TestCase):
 
         result = self.db.scalars(
             select(DepartmentKnowledge)
-            .join(Department)
+            .join(Department, DepartmentKnowledge.department_id == Department.id)
             .where(Department.company_id == 1)
         ).all()
 

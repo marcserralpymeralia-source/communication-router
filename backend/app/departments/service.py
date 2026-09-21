@@ -35,8 +35,17 @@ _KNOWLEDGE_TYPE_CANONICAL = {
 }
 _DEPARTMENT_FIELDS = {"name", "description", "destination_email", "active"}
 _KNOWLEDGE_FIELDS = {"title", "content", "knowledge_type", "active"}
+_KNOWLEDGE_FIELDS.update({"related_department_id", "priority"})
 _MEMBER_FIELDS = {"user_id", "role", "active"}
 _RACI_FIELDS = {"user_id", "scope", "raci_role", "active"}
+KNOWLEDGE_PRIORITIES = ("CRITICAL", "HIGH", "NORMAL", "LOW")
+_DEFAULT_KNOWLEDGE_PRIORITY = {
+    "guideline": "HIGH",
+    "exception": "HIGH",
+    "exclusion": "HIGH",
+    "responsibility": "NORMAL",
+    "example": "NORMAL",
+}
 
 
 class DepartmentInUseError(ValueError):
@@ -137,6 +146,8 @@ def _department_has_children(db: Session, department_id: int) -> bool:
     for model in (DepartmentKnowledge, DepartmentMember, RaciAssignment):
         if db.scalar(select(model.id).where(model.department_id == department_id).limit(1)) is not None:
             return True
+    if db.scalar(select(DepartmentKnowledge.id).where(DepartmentKnowledge.related_department_id == department_id).limit(1)) is not None:
+        return True
     return False
 
 
@@ -163,6 +174,28 @@ def _normalize_knowledge_type(value: str) -> str:
         return _KNOWLEDGE_TYPE_CANONICAL[normalized]
     except KeyError as exc:
         raise ValueError(f"Unsupported knowledge type: {value}") from exc
+
+
+def _normalize_priority(value: str | None, knowledge_type: str) -> str:
+    normalized = str(value or _DEFAULT_KNOWLEDGE_PRIORITY[knowledge_type]).strip().upper()
+    if normalized not in KNOWLEDGE_PRIORITIES:
+        raise ValueError(f"Unsupported knowledge priority: {value}")
+    return normalized
+
+
+def _validate_related_department(
+    db: Session,
+    company_id: int,
+    department_id: int,
+    related_department_id: int | None,
+) -> int | None:
+    if related_department_id is None:
+        return None
+    if related_department_id == department_id:
+        raise ValueError("Related department must be different from the owner department")
+    if get_department(db, company_id, related_department_id) is None:
+        raise ValueError("Related department not found for tenant")
+    return related_department_id
 
 
 def list_department_knowledge(
@@ -198,16 +231,23 @@ def create_department_knowledge(
     title: str,
     content: str,
     knowledge_type: str,
+    related_department_id: int | None = None,
+    priority: str | None = None,
     active: bool = True,
     commit: bool = True,
 ) -> DepartmentKnowledge:
     if get_department(db, company_id, department_id) is None:
         raise ValueError("Department not found for tenant")
+    canonical_type = _normalize_knowledge_type(knowledge_type)
     item = DepartmentKnowledge(
         department_id=department_id,
         title=title.strip(),
         content=content,
-        knowledge_type=_normalize_knowledge_type(knowledge_type),
+        knowledge_type=canonical_type,
+        related_department_id=_validate_related_department(
+            db, company_id, department_id, related_department_id
+        ),
+        priority=_normalize_priority(priority, canonical_type),
         active=active,
     )
     db.add(item)
@@ -232,6 +272,13 @@ def update_department_knowledge(
         raise ValueError(f"Unsupported knowledge fields: {', '.join(sorted(unknown))}")
     if "knowledge_type" in changes:
         changes["knowledge_type"] = _normalize_knowledge_type(changes["knowledge_type"])
+    effective_type = changes.get("knowledge_type", item.knowledge_type)
+    if "priority" in changes or "knowledge_type" in changes:
+        changes["priority"] = _normalize_priority(changes.get("priority"), effective_type)
+    if "related_department_id" in changes:
+        changes["related_department_id"] = _validate_related_department(
+            db, company_id, item.department_id, changes["related_department_id"]
+        )
     if "title" in changes:
         changes["title"] = str(changes["title"]).strip()
     for field, value in changes.items():
@@ -445,6 +492,10 @@ def _knowledge_bucket(knowledge_type: str) -> str:
 
 def _serialize_knowledge(item: DepartmentKnowledge) -> dict[str, Any]:
     canonical_type = _KNOWLEDGE_TYPE_CANONICAL.get(item.knowledge_type.strip().lower(), item.knowledge_type.strip().lower())
+    related_department = item.related_department
+    owner_department = item.department
+    if related_department is not None and owner_department is not None and related_department.company_id != owner_department.company_id:
+        related_department = None
     return {
         "id": item.id,
         "knowledge_id": item.id,
@@ -452,6 +503,9 @@ def _serialize_knowledge(item: DepartmentKnowledge) -> dict[str, Any]:
         "knowledge_type": canonical_type,
         "title": item.title,
         "content": item.content,
+        "related_department_id": item.related_department_id,
+        "related_department_name": related_department.name if related_department else None,
+        "priority": item.priority or _DEFAULT_KNOWLEDGE_PRIORITY.get(canonical_type, "NORMAL"),
     }
 
 

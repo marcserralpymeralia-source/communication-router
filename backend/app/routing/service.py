@@ -13,6 +13,13 @@ from app.agent.prompt_runtime import ROUTING_PROMPT_FALLBACK
 from app.communications.service import recipient_values
 from app.db.models import Communication, Department, Mailbox, RoutingCorrection, RoutingDecision
 from app.departments.service import build_department_routing_context
+from app.routing.decision_context import build_routing_decision_context
+from app.routing.destinations import (
+    persist_decision_destinations,
+    serialize_destinations,
+    update_primary_destination,
+    validate_destination_specs,
+)
 from app.routing.runtime import RoutingLLMRuntime
 
 
@@ -38,6 +45,26 @@ ROUTING_OUTPUT_SCHEMA: dict[str, Any] = {
         "reason": {"type": "string", "minLength": 1, "maxLength": 2000},
         "alternative_department_id": {"type": ["integer", "null"]},
         "ambiguity_reason": {"type": ["string", "null"], "maxLength": 1000},
+        "primary_role": {"type": "string", "enum": ["operational", "responsible", "accountable"]},
+        "runner_up_department_id": {"type": ["integer", "null"]},
+        "runner_up_confidence": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
+        "decision_margin": {"type": ["number", "null"], "minimum": -1.0, "maximum": 1.0},
+        "intent": {"type": ["string", "null"], "maxLength": 100},
+        "evidence_ids": {"type": "array", "items": {"type": "string", "pattern": "^K[0-9]+$"}, "maxItems": 10},
+        "additional_destinations": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["department_id", "role", "position"],
+                "properties": {
+                    "department_id": {"type": "integer"},
+                    "role": {"type": "string", "enum": ["operational", "responsible", "accountable", "consulted", "informed"]},
+                    "position": {"type": "integer", "minimum": 2, "maximum": 100},
+                },
+            },
+        },
     },
 }
 
@@ -73,6 +100,13 @@ class RoutingProposal(BaseModel):
     reason: StrictStr = Field(min_length=1, max_length=2000)
     alternative_department_id: StrictInt | None = None
     ambiguity_reason: StrictStr | None = Field(default=None, max_length=1000)
+    primary_role: StrictStr = Field(default="operational", pattern="^(operational|responsible|accountable)$")
+    runner_up_department_id: StrictInt | None = None
+    runner_up_confidence: StrictFloat | None = Field(default=None, ge=0.0, le=1.0)
+    decision_margin: StrictFloat | None = Field(default=None, ge=-1.0, le=1.0)
+    intent: StrictStr | None = Field(default=None, max_length=100)
+    evidence_ids: list[StrictStr] = Field(default_factory=list, max_length=10)
+    additional_destinations: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
 
 
 class RoutingRuntime(Protocol):
@@ -244,6 +278,31 @@ def _validate_proposal(db: Session, company_id: int, context: dict[str, Any], ra
         raise RoutingValidationError("alternative_department_id no pertenece a un departamento activo del tenant.")
     if proposal.alternative_department_id == proposal.proposed_department_id and proposal.alternative_department_id is not None:
         raise RoutingValidationError("La alternativa no puede ser el mismo departamento propuesto.")
+    if proposal.runner_up_department_id is not None and proposal.runner_up_department_id not in active_ids:
+        raise RoutingValidationError("runner_up_department_id no pertenece a un departamento activo del tenant.")
+    if proposal.runner_up_department_id == proposal.proposed_department_id and proposal.runner_up_department_id is not None:
+        raise RoutingValidationError("El runner-up no puede ser el mismo departamento propuesto.")
+    try:
+        additional_destinations = validate_destination_specs(
+            db,
+            company_id,
+            proposal.proposed_department_id,
+            proposal.runner_up_department_id,
+            proposal.additional_destinations,
+        )
+    except ValueError as exc:
+        raise RoutingValidationError(str(exc)) from exc
+    proposal = proposal.model_copy(update={"additional_destinations": additional_destinations})
+    if any(item["department_id"] not in active_ids for item in additional_destinations):
+        raise RoutingValidationError("additional destination does not belong to the active routing context.")
+    available_evidence = {
+        str(item.get("evidence_id"))
+        for item in context.get("knowledge", [])
+        if isinstance(item, dict) and item.get("evidence_id")
+    }
+    invalid_evidence = [item for item in proposal.evidence_ids if item not in available_evidence]
+    if invalid_evidence:
+        raise RoutingValidationError("evidence_ids contiene evidencia que no fue enviada en el contexto.")
     if proposal.proposed_department_id is None and not proposal.requires_review:
         return proposal.model_copy(update={"requires_review": True})
     return proposal
@@ -265,7 +324,12 @@ class RoutingService:
         routing_context: dict[str, Any] | None = None,
     ) -> RoutingProposal:
         payload = _communication_payload(db, company_id, communication)
-        context = routing_context if routing_context is not None else self.context_builder(company_id, db)
+        if routing_context is not None:
+            context = routing_context
+        elif self.context_builder is build_department_routing_context:
+            context = build_routing_decision_context(db, company_id, communication)
+        else:
+            context = self.context_builder(company_id, db)
         user_prompt = json.dumps(
             {
                 "communication": payload.model_dump(mode="json"),
@@ -406,6 +470,18 @@ def analyze_communication(
         communication_id=communication_id,
         department_id=proposal.proposed_department_id,
         alternative_department_id=proposal.alternative_department_id,
+        runner_up_department_id=proposal.runner_up_department_id,
+        runner_up_confidence=proposal.runner_up_confidence,
+        decision_margin=(
+            proposal.decision_margin
+            if proposal.decision_margin is not None
+            else (
+                proposal.confidence - proposal.runner_up_confidence
+                if proposal.runner_up_confidence is not None
+                else None
+            )
+        ),
+        evidence_ids_json=json.dumps(proposal.evidence_ids, ensure_ascii=False),
         category=proposal.category,
         confidence=proposal.confidence,
         requires_review=proposal.requires_review,
@@ -424,6 +500,14 @@ def analyze_communication(
     communication.routing_status = decision.status if decision.status in {"pending_review", "routed"} else "pending_review"
     communication.updated_at = now
     db.flush()
+    persist_decision_destinations(
+        db,
+        company_id,
+        decision,
+            primary_department_id=proposal.proposed_department_id,
+            primary_role=proposal.primary_role,
+            additional_destinations=proposal.additional_destinations,
+    )
     return decision
 
 
@@ -472,6 +556,7 @@ def confirm_routing_decision(
     decision.reviewed_at = now
     decision.updated_at = now
     decision.status = "confirmed"
+    update_primary_destination(db, company_id, decision, decision.department_id)
     communication.routing_status = "routed"
     communication.updated_at = now
     db.flush()
@@ -514,6 +599,7 @@ def correct_routing_decision(
     decision.reviewed_at = now
     decision.updated_at = now
     decision.status = "corrected"
+    update_primary_destination(db, company_id, decision, corrected_department_id)
     communication.routing_status = "routed"
     communication.updated_at = now
     db.flush()
@@ -535,6 +621,7 @@ def serialize_routing_decision(decision: RoutingDecision | None) -> dict[str, An
         "requires_review": decision.requires_review,
         "reason": decision.reason,
         "ambiguity_reason": decision.ambiguity_reason,
+        "destinations": serialize_destinations(decision.destinations),
         "status": decision.status,
         "source": decision.source,
         "analysis_number": decision.analysis_number,

@@ -218,6 +218,108 @@ class RoutingEvaluationTests(unittest.TestCase):
                     commit=False,
                 )
 
+    def test_evaluations_distinguish_real_destinations_raci_and_runner_up(self):
+        with self.session_factory() as db:
+            evaluation_set = create_evaluation_set(db, 1, name="Multi destino", commit=False)
+            create_evaluation_case(
+                db,
+                1,
+                evaluation_set.id,
+                title="Caso 107",
+                subject="Caso 107",
+                body="Operaciones y facturación deben intervenir.",
+                expected_department_id=1,
+                expected_destinations=[{"department_id": 2, "role": "operational", "position": 2}],
+                expected_requires_review=False,
+                commit=False,
+            )
+            create_evaluation_case(
+                db,
+                1,
+                evaluation_set.id,
+                title="Caso 108",
+                subject="Caso 108",
+                body="Operaciones y facturación deben intervenir.",
+                expected_department_id=1,
+                expected_destinations=[{"department_id": 2, "role": "operational", "position": 2}],
+                expected_requires_review=False,
+                commit=False,
+            )
+            create_evaluation_case(
+                db,
+                1,
+                evaluation_set.id,
+                title="Caso 125",
+                subject="Caso 125",
+                body="Operaciones responsable y prevención informada.",
+                expected_department_id=1,
+                expected_destinations=[{"department_id": 2, "role": "informed", "position": 2}],
+                expected_raci=[
+                    {"department_id": 1, "role": "responsible"},
+                    {"department_id": 2, "role": "informed"},
+                ],
+                expected_requires_review=False,
+                commit=False,
+            )
+            db.commit()
+
+            def provider(settings, messages, model):  # noqa: ANN001
+                del settings, model
+                payload = json.loads(messages[-1]["content"])
+                subject = payload["communication"]["subject"]
+                if subject == "Caso 125":
+                    response = {
+                        "proposed_department_id": 1,
+                        "primary_role": "responsible",
+                        "additional_destinations": [{"department_id": 2, "role": "informed", "position": 2}],
+                    }
+                else:
+                    response = {
+                        "proposed_department_id": 1,
+                        "additional_destinations": [{"department_id": 2, "role": "operational", "position": 2}],
+                    }
+                response.update(
+                    {
+                        "category": "multiaccion",
+                        "confidence": 0.95,
+                        "requires_review": False,
+                        "reason": "La participación está explícita en el caso.",
+                        "alternative_department_id": None,
+                        "ambiguity_reason": None,
+                    }
+                )
+                return {"ok": True, "content": json.dumps(response)}
+
+            run = run_evaluation(db, 1, evaluation_set.id, provider_call=provider, commit=False)
+            results = list(
+                db.scalars(
+                    select(RoutingEvaluationResult)
+                    .where(RoutingEvaluationResult.run_id == run.id)
+                    .order_by(RoutingEvaluationResult.evaluation_case_id)
+                )
+            )
+            self.assertEqual(len(results), 3)
+            self.assertTrue(all(result.additional_destinations_correct for result in results))
+            self.assertTrue(results[2].raci_match)
+            self.assertEqual(json.loads(results[0].predicted_destinations_json)[1]["department_id"], 2)
+            self.assertEqual(json.loads(run.metrics_json)["additional_destination_accuracy"], 1.0)
+
+    def test_evaluation_expected_destinations_are_tenant_and_activity_scoped(self):
+        with self.session_factory() as db:
+            evaluation_set = create_evaluation_set(db, 1, name="Tenant destinations", commit=False)
+            with self.assertRaisesRegex(ValueError, "does not belong"):
+                create_evaluation_case(
+                    db,
+                    1,
+                    evaluation_set.id,
+                    title="Cross tenant",
+                    subject="Asunto",
+                    body="Cuerpo",
+                    expected_department_id=1,
+                    expected_destinations=[{"department_id": 3, "role": "operational", "position": 2}],
+                    commit=False,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
