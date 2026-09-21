@@ -629,6 +629,7 @@ def _update_sync_checkpoint(
     error_message: str | None = None,
     progress: int | None = None,
     total: int | None = None,
+    preserve_normal_cursor: bool = False,
 ) -> None:
     if not sync_state or not sync_session:
         return
@@ -639,7 +640,8 @@ def _update_sync_checkpoint(
     sync_state.source_host = source_host or sync_state.source_host
     sync_state.source_username = source_username or sync_state.source_username
     sync_state.source_connected_email = source_connected_email or sync_state.source_connected_email
-    sync_state.last_seen_uid = last_uid or sync_state.last_seen_uid
+    if not preserve_normal_cursor:
+        sync_state.last_seen_uid = last_uid or sync_state.last_seen_uid
     sync_state.last_checkpoint_uid = last_uid or sync_state.last_checkpoint_uid
     sync_state.last_sync_at = now
     sync_state.sync_status = status
@@ -716,6 +718,7 @@ def _fetch_imap_emails(
     batch_size: int | None = None,
     stop_after_batch: bool = False,
     unbounded: bool = False,
+    preserve_normal_cursor: bool = False,
 ) -> dict:
     get_bind = getattr(db, "get_bind", None)
     kibak_runtime = bool(
@@ -797,6 +800,7 @@ def _fetch_imap_emails(
                         status="idle",
                         progress=0,
                         total=0,
+                        preserve_normal_cursor=preserve_normal_cursor,
                     )
                 _update_sync_status(settings, True, 0, 0, "Se ha detectado un cambio de buzón y se ha guardado el punto de partida actual.")
                 db.commit()
@@ -1119,6 +1123,7 @@ def _fetch_imap_emails(
                     status="running",
                     progress=processed_since_checkpoint,
                     total=found,
+                    preserve_normal_cursor=preserve_normal_cursor,
                 )
             if sync_state and sync_state.backfill_status in {"paused", "cancelled"}:
                 break
@@ -1150,6 +1155,7 @@ def _fetch_imap_emails(
                     status="paused",
                     progress=processed_since_checkpoint,
                     total=found,
+                    preserve_normal_cursor=preserve_normal_cursor,
                 )
             elif final_status == "cancelled":
                 _update_sync_checkpoint(
@@ -1169,6 +1175,7 @@ def _fetch_imap_emails(
                     status="cancelled",
                     progress=processed_since_checkpoint,
                     total=found,
+                    preserve_normal_cursor=preserve_normal_cursor,
                 )
             elif has_more:
                 _update_sync_checkpoint(
@@ -1188,6 +1195,7 @@ def _fetch_imap_emails(
                     status="running",
                     progress=processed_since_checkpoint,
                     total=found,
+                    preserve_normal_cursor=preserve_normal_cursor,
                 )
             else:
                 _update_sync_checkpoint(
@@ -1207,6 +1215,7 @@ def _fetch_imap_emails(
                     status="idle",
                     progress=processed_since_checkpoint,
                     total=found,
+                    preserve_normal_cursor=preserve_normal_cursor,
                 )
         _update_sync_status(settings, True, saved, duplicates, f"{found} correos encontrados, {downloaded} descargados, {saved} importados, {duplicates} duplicados ignorados, {discarded} descartados, {errors} errores, {attachments_saved} adjuntos guardados.")
         db.commit()
@@ -1276,6 +1285,7 @@ def _fetch_imap_emails(
                 error_message=message,
                 progress=processed_since_checkpoint if "processed_since_checkpoint" in locals() else 0,
                 total=found,
+                preserve_normal_cursor=preserve_normal_cursor,
             )
         return {"ok": False, "found": found, "downloaded": downloaded, "saved": saved, "duplicates": duplicates, "discarded": discarded, "attachments": attachments_saved, "errors": errors, "routing_jobs_enqueued": routing_jobs_enqueued, "routing_job_errors": routing_job_errors, "message": message}
     finally:
@@ -1326,6 +1336,7 @@ def backfill_imap_emails(
     sync_session: Session | None = None,
     mailbox_id: int | None = None,
     unbounded: bool = False,
+    preserve_normal_cursor: bool = False,
 ) -> dict:
     start_date = _parse_imap_date(from_date or settings.read_from_date)
     if not start_date:
@@ -1359,6 +1370,7 @@ def backfill_imap_emails(
         batch_size=batch_size,
         stop_after_batch=stop_after_batch,
         unbounded=unbounded,
+        preserve_normal_cursor=preserve_normal_cursor,
     )
 
 
