@@ -641,15 +641,12 @@ async def backfill_mailbox(
     if not mailbox:
         return _response(request, {"ok": False, "message": "No se encontró el buzón solicitado."}, status_code=404)
     data = await _form_data(request)
-    try:
-        requested_limit = effective_email_batch_limit(data.get("limit"), standard_default=100, standard_max=100)
-    except (TypeError, ValueError):
-        return _response(request, {"ok": False, "message": "El límite de backfill no es válido."}, status_code=400)
     payload = {
         "mailbox_id": mailbox.id,
         "from_date": data.get("from_date") or mailbox.read_from_date,
         "to_date": data.get("to_date") or None,
-        "limit": requested_limit,
+        "limit": None,
+        "unbounded": True,
     }
     job = enqueue_job(db, company_id=user.company_id, job_type="backfill_imap", payload=payload, created_by_user_id=user.id)
     return _response(request, {"ok": True, "job_id": job.id, "status": job.status, "mailbox_id": mailbox.id})

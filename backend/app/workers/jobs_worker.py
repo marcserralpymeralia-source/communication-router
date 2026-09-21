@@ -136,7 +136,7 @@ def _is_retryable_exception(exc: Exception) -> bool:
     )
 
 
-def _email_job_context(db, master_db, company_id: int, payload: dict):  # noqa: ANN001
+def _email_job_context(db, master_db, company_id: int, payload: dict, *, allow_disabled: bool = False):  # noqa: ANN001
     raw_mailbox_id = payload.get("mailbox_id")
     if raw_mailbox_id not in (None, ""):
         try:
@@ -146,7 +146,7 @@ def _email_job_context(db, master_db, company_id: int, payload: dict):  # noqa: 
         mailbox = db.get(Mailbox, mailbox_id)
         if not mailbox or mailbox.company_id != company_id:
             raise RuntimeError("No se encontró el buzón solicitado.")
-        if not mailbox.enabled:
+        if not mailbox.enabled and not allow_disabled:
             raise RuntimeError("El buzón solicitado está desactivado.")
         state = get_or_create_mailbox_sync_state(master_db, mailbox)
         return mailbox, state, mailbox_id
@@ -244,8 +244,15 @@ def _process_job(db, job: BackgroundJob) -> dict:
             }
         master_db = MasterSessionLocal()
         try:
-            settings, sync_state, mailbox_id = _email_job_context(db, master_db, job.company_id, payload)
-            requested_limit = max(int(payload.get("limit") or 1), 1)
+            settings, sync_state, mailbox_id = _email_job_context(
+                db,
+                master_db,
+                job.company_id,
+                payload,
+                allow_disabled=True,
+            )
+            unbounded = bool(payload.get("unbounded", False))
+            requested_limit = None if unbounded else max(int(payload.get("limit") or 1), 1)
 
             result = backfill_imap_emails(
                 db,
@@ -253,7 +260,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 job.company_id,
                 payload.get("from_date"),
                 payload.get("to_date"),
-                requested_limit,
+                limit=requested_limit,
                 from_uid=payload.get("from_uid"),
                 to_uid=payload.get("to_uid"),
                 batch_size=5,
@@ -262,12 +269,13 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 sync_state=sync_state,
                 sync_session=master_db,
                 mailbox_id=mailbox_id,
+                unbounded=unbounded,
             )
 
             consumed = max(int(result.get("batch_count") or 0), 0)
             processed_before = max(int(payload.get("processed_count") or 0), 0)
             processed_count = processed_before + consumed
-            remaining_limit = max(requested_limit - consumed, 0)
+            remaining_limit = None if unbounded else max(requested_limit - consumed, 0)
             total_found = max(int(payload.get("total_found") or result.get("total_found") or result.get("found") or 0), 0)
             remaining_messages = max(total_found - processed_count, 0)
             result["batch_count"] = consumed
@@ -276,11 +284,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
             result["remaining_messages"] = remaining_messages
             result["remaining"] = remaining_messages
 
-            if result.get("ok") and result.get("has_more") and remaining_limit > 0 and remaining_messages > 0:
+            if result.get("ok") and result.get("has_more") and (unbounded or remaining_limit > 0) and remaining_messages > 0:
                 continuation_payload = {
                     "from_date": payload.get("from_date"),
                     "to_date": payload.get("to_date"),
                     "limit": remaining_limit,
+                    "unbounded": unbounded,
                     "resume": True,
                     "total_found": total_found,
                     "processed_count": processed_count,

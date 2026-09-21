@@ -426,6 +426,45 @@ class EmailAiLearningTests(unittest.TestCase):
         tenant_db.close()
         master_db.close()
 
+    def test_backfill_unbounded_mode_processes_more_than_pilot_limit(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        master_db = self.MasterSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == 1, EmailSyncState.channel_key == "email"))
+        messages = {
+            str(uid): (
+                f"From: compras@example.com\r\n"
+                f"To: pedidos@example.com\r\n"
+                f"Subject: Histórico {uid}\r\n"
+                f"Message-ID: <historico-{uid}@example.com>\r\n"
+                f"\r\n"
+                f"Mensaje {uid}"
+            ).encode()
+            for uid in range(1, 56)
+        }
+
+        with patch("app.settings.integrations._imap_client", return_value=FakeImapClient(messages)):
+            result = backfill_imap_emails(
+                tenant_db,
+                settings,
+                1,
+                from_date="2026-09-14",
+                to_date="2026-09-21",
+                limit=None,
+                sync_state=state,
+                sync_session=master_db,
+                unbounded=True,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["found"], 55)
+        self.assertEqual(result["saved"], 55)
+        self.assertFalse(result["has_more"])
+        self.assertEqual(tenant_db.scalar(select(func.count()).select_from(Email)) or 0, 55)
+        tenant_db.close()
+        master_db.close()
+
     def test_backfill_imap_deduplicates_pdf_attachment_on_second_run(self):
         self._seed_imap()
         tenant_db = self.TenantSession()

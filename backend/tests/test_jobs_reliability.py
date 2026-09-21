@@ -23,7 +23,7 @@ from app.agent.platform import UnifiedOrderPipelineService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.agent.extraction.schema import ExtractedCustomer, ExtractedOrderLine, OrderExtraction, OrderExtractionInput, OrderExtractionResult  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, InboundMessage, JobAttempt, LLMSettings, Order, OrderLine, Product  # noqa: E402
+from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, InboundMessage, JobAttempt, LLMSettings, Mailbox, Order, OrderLine, Product  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
 from app.jobs.service import claim_next_job, enqueue_job, execute_job_inline, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
@@ -337,6 +337,78 @@ class JobsReliabilityTests(unittest.TestCase):
             self.assertEqual(continuation_payload["total_found"], 12)
             self.assertEqual(continuation_payload["processed_count"], 10)
             self.assertTrue(continuation_payload["resume"])
+        finally:
+            db.close()
+
+    def test_unbounded_backfill_can_use_disabled_mailbox_without_enabling_it(self):
+        self._seed_master()
+
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=True,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            mailbox = Mailbox(
+                company_id=1,
+                name="Pilot",
+                email_address="pilot@example.com",
+                enabled=False,
+                auto_sync_enabled=False,
+                mark_as_read_after_import=False,
+            )
+            db.add(mailbox)
+            db.commit()
+            db.refresh(mailbox)
+
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="backfill_imap",
+                payload={
+                    "mailbox_id": mailbox.id,
+                    "from_date": "2026-09-14",
+                    "to_date": "2026-09-21",
+                    "limit": None,
+                    "unbounded": True,
+                },
+                created_by_user_id=None,
+            )
+
+            with patch(
+                "app.workers.jobs_worker.MasterSessionLocal",
+                new=self.MasterSession,
+            ), patch(
+                "app.workers.jobs_worker.backfill_imap_emails",
+                return_value={
+                    "ok": True,
+                    "saved": 2,
+                    "duplicates": 0,
+                    "has_more": False,
+                    "last_uid": "2",
+                    "batch_count": 2,
+                    "found": 2,
+                },
+            ) as backfill:
+                result = _process_job(db, job)
+
+            self.assertTrue(result["ok"])
+            kwargs = backfill.call_args.kwargs
+            self.assertTrue(kwargs["unbounded"])
+            self.assertEqual(kwargs["limit"], None)
+            self.assertTrue(kwargs["stop_after_batch"])
+            self.assertFalse(db.get(Mailbox, mailbox.id).enabled)
         finally:
             db.close()
 

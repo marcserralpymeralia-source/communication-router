@@ -715,6 +715,7 @@ def _fetch_imap_emails(
     mailbox_id: int | None = None,
     batch_size: int | None = None,
     stop_after_batch: bool = False,
+    unbounded: bool = False,
 ) -> dict:
     get_bind = getattr(db, "get_bind", None)
     kibak_runtime = bool(
@@ -846,7 +847,7 @@ def _fetch_imap_emails(
             return {"ok": False, "found": 0, "saved": 0, "downloaded": 0, "duplicates": 0, "discarded": 0, "errors": 0, "message": "No se pudieron listar correos."}
         if start_date or end_date:
             ids = sorted(ids, key=lambda raw: int(raw.decode(errors="ignore") or 0))
-        if limit is not None or get_settings().is_pilot_runtime:
+        if not unbounded and (limit is not None or get_settings().is_pilot_runtime):
             limit = effective_email_batch_limit(limit, standard_default=IMAP_RECENT_MESSAGES_LIMIT, standard_max=IMAP_MAX_MESSAGES_PER_RUN)
             ids = ids[:limit] if (start_date or end_date) else ids[-limit:]
         found = len(ids)
@@ -1324,6 +1325,7 @@ def backfill_imap_emails(
     sync_state: EmailSyncState | MailboxSyncState | None = None,
     sync_session: Session | None = None,
     mailbox_id: int | None = None,
+    unbounded: bool = False,
 ) -> dict:
     start_date = _parse_imap_date(from_date or settings.read_from_date)
     if not start_date:
@@ -1344,7 +1346,11 @@ def backfill_imap_emails(
         start_uid=from_uid,
         end_uid=to_uid,
         unread_only=False,
-        limit=effective_email_batch_limit(limit, standard_default=IMAP_RECENT_MESSAGES_LIMIT, standard_max=IMAP_MAX_MESSAGES_PER_RUN),
+        limit=(
+            None
+            if unbounded
+            else effective_email_batch_limit(limit, standard_default=IMAP_RECENT_MESSAGES_LIMIT, standard_max=IMAP_MAX_MESSAGES_PER_RUN)
+        ),
         auto_process=False,
         label=f"Backfill IMAP desde {start_date.strftime('%d/%m/%Y')}{' hasta ' + end_date.strftime('%d/%m/%Y') if end_date else ''}",
         sync_state=sync_state,
@@ -1352,6 +1358,7 @@ def backfill_imap_emails(
         mailbox_id=mailbox_id,
         batch_size=batch_size,
         stop_after_batch=stop_after_batch,
+        unbounded=unbounded,
     )
 
 
