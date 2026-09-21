@@ -1,8 +1,36 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from hashlib import sha256
+from collections.abc import Iterator
 
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection, Engine
+
+
+MigrationBind = Engine | Connection
+
+
+@contextmanager
+def connection_scope(bind: MigrationBind) -> Iterator[Connection]:
+    """Use an existing migration connection without closing or committing it."""
+
+    if isinstance(bind, Connection):
+        yield bind
+        return
+    with bind.connect() as connection:
+        yield connection
+
+
+@contextmanager
+def transaction_scope(bind: MigrationBind) -> Iterator[Connection]:
+    """Open a transaction only when the caller did not provide one."""
+
+    if isinstance(bind, Connection):
+        yield bind
+        return
+    with bind.begin() as connection:
+        yield connection
 
 
 def checksum_text(*parts: str) -> str:
@@ -13,27 +41,27 @@ def checksum_text(*parts: str) -> str:
     return digest.hexdigest()
 
 
-def table_exists(engine, table_name: str) -> bool:  # noqa: ANN001
-    with engine.connect() as conn:
+def table_exists(engine: MigrationBind, table_name: str) -> bool:
+    with connection_scope(engine) as conn:
         return table_name in inspect(conn).get_table_names()
 
 
-def existing_columns(engine, table_name: str) -> set[str]:  # noqa: ANN001
-    with engine.connect() as conn:
+def existing_columns(engine: MigrationBind, table_name: str) -> set[str]:
+    with connection_scope(engine) as conn:
         inspector = inspect(conn)
         if table_name not in inspector.get_table_names():
             return set()
         return {column["name"] for column in inspector.get_columns(table_name)}
 
 
-def ensure_columns(engine, table_name: str, columns: dict[str, str], *, dry_run: bool = False) -> list[str]:  # noqa: ANN001
-    with engine.connect() as conn:
+def ensure_columns(engine: MigrationBind, table_name: str, columns: dict[str, str], *, dry_run: bool = False) -> list[str]:
+    with connection_scope(engine) as conn:
         inspector = inspect(conn)
         if table_name not in inspector.get_table_names():
             return []
         current_columns = {column["name"] for column in inspector.get_columns(table_name)}
     actions: list[str] = []
-    with engine.begin() as conn:
+    with transaction_scope(engine) as conn:
         for column_name, column_sql in columns.items():
             if column_name in current_columns:
                 continue
@@ -44,8 +72,8 @@ def ensure_columns(engine, table_name: str, columns: dict[str, str], *, dry_run:
     return actions
 
 
-def ensure_unique_index(engine, table_name: str, index_name: str, columns: tuple[str, ...], *, dry_run: bool = False) -> list[str]:  # noqa: ANN001
-    with engine.connect() as conn:
+def ensure_unique_index(engine: MigrationBind, table_name: str, index_name: str, columns: tuple[str, ...], *, dry_run: bool = False) -> list[str]:
+    with connection_scope(engine) as conn:
         inspector = inspect(conn)
         if table_name not in inspector.get_table_names():
             return []
@@ -54,13 +82,13 @@ def ensure_unique_index(engine, table_name: str, index_name: str, columns: tuple
         return []
     statement = f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table_name} ({', '.join(columns)})"
     if not dry_run:
-        with engine.begin() as conn:
+        with transaction_scope(engine) as conn:
             conn.execute(text(statement))
     return [statement]
 
 
-def ensure_index(engine, table_name: str, index_name: str, columns: tuple[str, ...], *, dry_run: bool = False) -> list[str]:  # noqa: ANN001
-    with engine.connect() as conn:
+def ensure_index(engine: MigrationBind, table_name: str, index_name: str, columns: tuple[str, ...], *, dry_run: bool = False) -> list[str]:
+    with connection_scope(engine) as conn:
         inspector = inspect(conn)
         if table_name not in inspector.get_table_names():
             return []
@@ -76,13 +104,13 @@ def ensure_index(engine, table_name: str, index_name: str, columns: tuple[str, .
         return []
     statement = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({', '.join(columns)})"
     if not dry_run:
-        with engine.begin() as conn:
+        with transaction_scope(engine) as conn:
             conn.execute(text(statement))
     return [statement]
 
 
 def ensure_postgresql_foreign_key(
-    engine,
+    engine: MigrationBind,
     table_name: str,
     constrained_columns: tuple[str, ...],
     referred_table: str,
@@ -94,7 +122,7 @@ def ensure_postgresql_foreign_key(
 ) -> list[str]:  # noqa: ANN001
     if engine.dialect.name != "postgresql":
         return []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         inspector = inspect(conn)
         if table_name not in inspector.get_table_names():
             return []
@@ -135,7 +163,7 @@ def ensure_postgresql_foreign_key(
             )
         return []
 
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         orphan_count = conn.execute(
             text(
                 f"SELECT COUNT(*) FROM {table_name} child "
@@ -150,13 +178,13 @@ def ensure_postgresql_foreign_key(
         )
 
     if not dry_run:
-        with engine.begin() as conn:
+        with transaction_scope(engine) as conn:
             conn.execute(text(statement))
     return [statement]
 
 
 def ensure_postgresql_check_constraint(
-    engine,
+    engine: MigrationBind,
     table_name: str,
     constraint_name: str,
     expression: str,
@@ -166,7 +194,7 @@ def ensure_postgresql_check_constraint(
 ) -> list[str]:  # noqa: ANN001
     if engine.dialect.name != "postgresql":
         return []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         inspector = inspect(conn)
         if table_name not in inspector.get_table_names():
             return []
@@ -182,6 +210,6 @@ def ensure_postgresql_check_constraint(
         return []
     statement = f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} CHECK ({expression})"
     if not dry_run:
-        with engine.begin() as conn:
+        with transaction_scope(engine) as conn:
             conn.execute(text(statement))
     return [statement]

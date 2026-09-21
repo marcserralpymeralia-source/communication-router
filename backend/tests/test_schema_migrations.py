@@ -25,10 +25,11 @@ from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER
 from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, MasterSchemaMigration, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
-from app.migrations.helpers import ensure_postgresql_foreign_key, table_exists  # noqa: E402
+from app.migrations.helpers import connection_scope, ensure_postgresql_foreign_key, table_exists  # noqa: E402
 from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_routing_destinations, _apply_tenant_routing_knowledge_enrichment  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
+from app.migrations.runner import MigrationSpec, run_migration_plan  # noqa: E402
 
 
 class SchemaMigrationTests(unittest.TestCase):
@@ -40,12 +41,18 @@ class SchemaMigrationTests(unittest.TestCase):
         self.simulation_root = base / "simulations"
         self.master_engine = create_engine(f"sqlite:///{self.master_path.as_posix()}", connect_args={"check_same_thread": False})
         self.tenant_engine = create_engine(f"sqlite:///{self.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        self.atomic_engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False, "autocommit": False},
+        )
         self.MasterSession = sessionmaker(bind=self.master_engine, autoflush=False, autocommit=False)
         self.TenantSession = sessionmaker(bind=self.tenant_engine, autoflush=False, autocommit=False)
+        self.AtomicSession = sessionmaker(bind=self.atomic_engine, autoflush=False, autocommit=False)
 
     def tearDown(self):
         self.master_engine.dispose()
         self.tenant_engine.dispose()
+        self.atomic_engine.dispose()
         self.tempdir.cleanup()
 
     def _create_tables_without_ledger(self, engine, base_metadata):  # noqa: ANN001
@@ -472,6 +479,132 @@ class SchemaMigrationTests(unittest.TestCase):
             db.close()
         self.assertTrue(report["is_current"])
         self.assertEqual(report["version"], CURRENT_TENANT_SCHEMA_VERSION)
+
+    def _seed_transactional_ledger(self, version: str = "2026.09.08.3") -> None:
+        TenantSchemaMigration.__table__.create(bind=self.atomic_engine, checkfirst=True)
+        db = self.AtomicSession()
+        db.add(
+            TenantSchemaMigration(
+                company_id=1,
+                version=version,
+                name=f"tenant migration {version}",
+                checksum="previous-checksum",
+                status="current",
+            )
+        )
+        db.commit()
+        db.close()
+
+    @staticmethod
+    def _transactional_specs(*, fail_17: bool = False, fail_18: bool = False) -> list[MigrationSpec]:
+        def baseline(_bind, _dry_run):  # noqa: ANN001
+            return []
+
+        def migration_17(bind, dry_run):  # noqa: ANN001
+            if dry_run:
+                return ["CREATE TABLE atomic_migration_17"]
+            with connection_scope(bind) as conn:
+                conn.execute(text("CREATE TABLE atomic_migration_17 (id INTEGER PRIMARY KEY)"))
+                conn.execute(text("CREATE INDEX atomic_migration_17_idx ON atomic_migration_17 (id)"))
+            if fail_17:
+                raise RuntimeError("failure in 2026.09.17.1")
+            return ["CREATE TABLE atomic_migration_17"]
+
+        def migration_18(bind, dry_run):  # noqa: ANN001
+            if dry_run:
+                return ["CREATE TABLE atomic_migration_18"]
+            with connection_scope(bind) as conn:
+                conn.execute(text("CREATE TABLE atomic_migration_18 (id INTEGER PRIMARY KEY)"))
+                conn.execute(text("CREATE INDEX atomic_migration_18_idx ON atomic_migration_18 (id)"))
+            if fail_18:
+                raise RuntimeError("failure in 2026.09.18.1")
+            return ["CREATE TABLE atomic_migration_18"]
+
+        return [
+            MigrationSpec("2026.09.08.3", "tenant worker heartbeats", "baseline", baseline),
+            MigrationSpec("2026.09.17.1", "tenant routing knowledge enrichment", "17", migration_17),
+            MigrationSpec("2026.09.18.1", "tenant normalized routing destinations", "18", migration_18),
+        ]
+
+    def _transactional_ledger_version(self) -> str:
+        db = self.AtomicSession()
+        try:
+            return db.scalar(select(TenantSchemaMigration.version).order_by(TenantSchemaMigration.id.desc()))
+        finally:
+            db.close()
+
+    def test_each_migration_commits_schema_and_ledger_together(self):
+        self._seed_transactional_ledger()
+
+        result = run_migration_plan(
+            self.atomic_engine,
+            self.AtomicSession(),
+            TenantSchemaMigration,
+            self._transactional_specs(),
+            company_id=1,
+        )
+
+        self.assertEqual(result["applied_versions"], ["2026.09.17.1", "2026.09.18.1"])
+        self.assertEqual(self._transactional_ledger_version(), "2026.09.18.1")
+        self.assertTrue(table_exists(self.atomic_engine, "atomic_migration_17"))
+        self.assertTrue(table_exists(self.atomic_engine, "atomic_migration_18"))
+
+    def test_failed_17_rolls_back_all_17_schema_and_keeps_previous_ledger(self):
+        self._seed_transactional_ledger()
+
+        with self.assertRaisesRegex(RuntimeError, "2026.09.17.1"):
+            run_migration_plan(
+                self.atomic_engine,
+                self.AtomicSession(),
+                TenantSchemaMigration,
+                self._transactional_specs(fail_17=True),
+                company_id=1,
+            )
+
+        self.assertFalse(table_exists(self.atomic_engine, "atomic_migration_17"))
+        self.assertEqual(self._transactional_ledger_version(), "2026.09.08.3")
+
+    def test_failed_18_keeps_committed_17_and_does_not_leave_partial_18(self):
+        self._seed_transactional_ledger()
+
+        with self.assertRaisesRegex(RuntimeError, "2026.09.18.1"):
+            run_migration_plan(
+                self.atomic_engine,
+                self.AtomicSession(),
+                TenantSchemaMigration,
+                self._transactional_specs(fail_18=True),
+                company_id=1,
+            )
+
+        self.assertTrue(table_exists(self.atomic_engine, "atomic_migration_17"))
+        self.assertFalse(table_exists(self.atomic_engine, "atomic_migration_18"))
+        self.assertEqual(self._transactional_ledger_version(), "2026.09.17.1")
+
+    def test_retry_after_failed_migration_continues_from_last_committed_version(self):
+        self._seed_transactional_ledger()
+
+        with self.assertRaises(RuntimeError):
+            run_migration_plan(
+                self.atomic_engine,
+                self.AtomicSession(),
+                TenantSchemaMigration,
+                self._transactional_specs(fail_18=True),
+                company_id=1,
+            )
+
+        result = run_migration_plan(
+            self.atomic_engine,
+            self.AtomicSession(),
+            TenantSchemaMigration,
+            self._transactional_specs(),
+            company_id=1,
+        )
+
+        self.assertEqual(result["applied_versions"], ["2026.09.18.1"])
+        self.assertEqual(self._transactional_ledger_version(), "2026.09.18.1")
+        with self.atomic_engine.connect() as conn:
+            self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM atomic_migration_17")).scalar_one(), 0)
+            self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM atomic_migration_18")).scalar_one(), 0)
 
     def test_upgrade_master_copy_preserves_state(self):
         self._create_tables_without_ledger(self.master_engine, MasterBase.metadata)

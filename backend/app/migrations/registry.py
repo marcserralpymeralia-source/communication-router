@@ -5,14 +5,17 @@ from datetime import datetime, timezone
 from app.db.models import TenantSchemaMigration
 from app.master.models import MasterSchemaMigration
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 
 from app.migrations.helpers import (
     checksum_text,
+    connection_scope,
     ensure_columns,
     ensure_index,
     ensure_postgresql_check_constraint,
     ensure_postgresql_foreign_key,
     ensure_unique_index,
+    transaction_scope,
 )
 from app.migrations.runner import MigrationSpec, registry_checksum
 
@@ -648,7 +651,7 @@ def _apply_tenant_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import TenantSchemaMigration
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "schema_migrations" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE schema_migrations (...)")
             if not dry_run:
@@ -672,7 +675,7 @@ def _apply_tenant_mailboxes(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import Mailbox
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         tables = set(inspect(conn).get_table_names())
     if "mailboxes" not in tables:
         actions.append("CREATE TABLE mailboxes (...)")
@@ -700,7 +703,7 @@ def _apply_tenant_mailboxes(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
         "smtp_password_encrypted", "from_email", "from_name", "reply_to", "default_cc", "default_bcc",
         "save_internal_copy", "preserve_thread_headers", "auto_process_on_fetch", "updated_by",
     )
-    with engine.begin() as conn:
+    with transaction_scope(engine) as conn:
         for row in conn.execute(select(email_settings_table)).mappings():
             email_address = (row.get("connected_email") or row.get("imap_username") or "").strip().lower()
             if not email_address:
@@ -737,7 +740,7 @@ def _apply_tenant_communications(engine, dry_run: bool) -> list[str]:  # noqa: A
     from app.db.models import Communication, CommunicationAttachment
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         tables = set(inspect(conn).get_table_names())
     if "communications" not in tables:
         actions.append("CREATE TABLE communications (...)")
@@ -773,14 +776,14 @@ def _ensure_raci_null_user_index(engine, dry_run: bool) -> list[str]:  # noqa: A
         "ON raci_assignments (company_id, department_id, scope, raci_role) "
         "WHERE user_id IS NULL"
     )
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "raci_assignments" not in inspect(conn).get_table_names():
             return []
         existing_indexes = {index["name"] for index in inspect(conn).get_indexes("raci_assignments")}
     if index_name in existing_indexes:
         return []
     if not dry_run:
-        with engine.begin() as conn:
+        with transaction_scope(engine) as conn:
             conn.execute(text(statement))
     return [statement]
 
@@ -795,7 +798,7 @@ def _apply_tenant_departments(engine, dry_run: bool) -> list[str]:  # noqa: ANN0
         ("department_members", DepartmentMember, DEPARTMENT_MEMBER_COLUMNS),
         ("raci_assignments", RaciAssignment, RACI_ASSIGNMENT_COLUMNS),
     )
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         tables = set(inspect(conn).get_table_names())
     for table_name, model, columns in models:
         if table_name == "raci_assignments":
@@ -873,7 +876,7 @@ def _apply_tenant_routing_decisions(engine, dry_run: bool) -> list[str]:  # noqa
         ("routing_decisions", RoutingDecision, ROUTING_DECISION_COLUMNS),
         ("routing_corrections", RoutingCorrection, ROUTING_CORRECTION_COLUMNS),
     )
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         tables = set(inspect(conn).get_table_names())
     for table_name, model, columns in models:
         if table_name not in tables:
@@ -906,7 +909,7 @@ def _apply_tenant_job_reliability(engine, dry_run: bool) -> list[str]:  # noqa: 
     from app.db.models import JobAttempt
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "job_attempts" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE job_attempts (...)")
             if not dry_run:
@@ -928,7 +931,7 @@ def _apply_tenant_messages(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.migrations.runner import MigrationError
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "conversations" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE conversations (...)")
             if not dry_run:
@@ -1081,7 +1084,10 @@ def _apply_tenant_messages(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
                 ).mappings().one_or_none()
                 if order_row and not order_row.get("conversation_id"):
                     db.execute(orders_table.update().where(orders_table.c.id == order_row["id"]).values(conversation_id=conversation.id))
-        db.commit()
+        if isinstance(engine, Connection):
+            db.flush()
+        else:
+            db.commit()
     finally:
         db.close()
     return actions
@@ -1090,7 +1096,7 @@ def _apply_tenant_messages(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
 def _apply_master_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.master.models import MasterSchemaMigration
 
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "schema_migrations" not in inspect(conn).get_table_names():
             if not dry_run:
                 MasterSchemaMigration.__table__.create(bind=engine, checkfirst=True)
@@ -1104,7 +1110,7 @@ def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa:
     from app.master.models import EmailSyncState
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "email_sync_state" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE email_sync_state (...)")
             if not dry_run:
@@ -1135,7 +1141,7 @@ def _apply_master_mailbox_sync_state(engine, dry_run: bool) -> list[str]:  # noq
     from app.master.models import MailboxSyncState
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "mailbox_sync_state" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE mailbox_sync_state (...)")
             if not dry_run:
@@ -1151,7 +1157,7 @@ def _apply_master_mailbox_sync_state(engine, dry_run: bool) -> list[str]:  # noq
 def _apply_kibak_master_auth_throttles(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.master.models import AuthThrottle
 
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         exists = "auth_throttles" in inspect(conn).get_table_names()
     if exists:
         return []
@@ -1164,7 +1170,7 @@ def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN0
     from app.db.models import LearningProposal, PromptExecution
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "prompt_executions" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE prompt_executions (...)")
             if not dry_run:
@@ -1210,7 +1216,7 @@ def _apply_tenant_product_embeddings(engine, dry_run: bool) -> list[str]:  # noq
     from app.db.models import ProductEmbedding
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "product_embeddings" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE product_embeddings (...)")
             if not dry_run:
@@ -1233,7 +1239,7 @@ def _apply_tenant_knowledge_entries(engine, dry_run: bool) -> list[str]:  # noqa
     from app.db.models import KnowledgeEntry
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "knowledge_entries" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE knowledge_entries (...)")
             if not dry_run:
@@ -1273,7 +1279,7 @@ def _apply_tenant_routing_actions(engine, dry_run: bool) -> list[str]:  # noqa: 
     from app.db.models import RoutingAction
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         if "routing_actions" not in inspect(conn).get_table_names():
             actions.append("CREATE TABLE routing_actions (...)")
             if not dry_run:
@@ -1400,7 +1406,7 @@ def _apply_tenant_routing_destinations(engine, dry_run: bool) -> list[str]:  # n
     from app.db.models import RoutingDecisionDestination
 
     actions: list[str] = []
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         tables = set(inspect(conn).get_table_names())
     table_name = "routing_decision_destinations"
     if table_name not in tables:
@@ -1450,7 +1456,7 @@ def _apply_tenant_routing_evaluations(engine, dry_run: bool) -> list[str]:  # no
         ("routing_evaluation_runs", RoutingEvaluationRun),
         ("routing_evaluation_results", RoutingEvaluationResult),
     )
-    with engine.connect() as conn:
+    with connection_scope(engine) as conn:
         existing = set(inspect(conn).get_table_names())
     for table_name, model in tables:
         if table_name not in existing:

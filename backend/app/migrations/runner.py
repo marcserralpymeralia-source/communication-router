@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Callable, Iterable
 
 from sqlalchemy import select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 
 class MigrationError(RuntimeError):
@@ -174,21 +174,77 @@ def run_migration_plan(
 
     applied_index = _spec_index(specs, state.version if state else None)
     pending = specs[applied_index + 1 :] if applied_index is not None else specs
+    # Release the read transaction used to inspect the ledger before opening
+    # the per-migration connection/transaction below.
+    session.rollback()
     total_execution_ms = 0
     planned_actions: list[str] = []
     applied_versions: list[str] = []
-    for spec in pending:
+    last_summary: dict | None = None
+    first_pending_index = applied_index + 1 if applied_index is not None else 0
+
+    for offset, spec in enumerate(pending):
+        spec_index = first_pending_index + offset
         start = perf_counter()
-        actions = spec.upgrade(engine, dry_run)
-        total_execution_ms += int(round((perf_counter() - start) * 1000))
+        if dry_run:
+            actions = spec.upgrade(engine, dry_run=True)
+            elapsed_ms = int(round((perf_counter() - start) * 1000))
+            planned_actions.extend(actions)
+            applied_versions.append(spec.version)
+            total_execution_ms += elapsed_ms
+            continue
+
+        # Each migration owns one database transaction. The ledger update is
+        # flushed on the same connection before the transaction commits.
+        with engine.begin() as connection:
+            migration_session = sessionmaker(
+                bind=connection,
+                autoflush=False,
+                expire_on_commit=False,
+            )()
+            try:
+                actions = spec.upgrade(connection, dry_run=False)
+                elapsed_ms = int(round((perf_counter() - start) * 1000))
+                migration_state = latest_state(migration_session, model)
+                _store_state(
+                    migration_session,
+                    model,
+                    migration_state,
+                    version=spec.version,
+                    name=spec.name,
+                    checksum=registry_checksum(specs[: spec_index + 1]),
+                    execution_ms=elapsed_ms,
+                    application_version=application_version,
+                    status="current",
+                    applied_at=(
+                        migration_state.applied_at
+                        if migration_state and getattr(migration_state, "applied_at", None)
+                        else now_utc()
+                    ),
+                    last_checked_at=now_utc(),
+                    last_error=None,
+                    company_id=company_id,
+                    commit=False,
+                )
+                migration_session.flush()
+                last_summary = migration_summary(
+                    migration_state,
+                    current_version=current_version,
+                    current_name=current_name,
+                    current_checksum=current_checksum,
+                )
+            finally:
+                migration_session.close()
+
+        total_execution_ms += elapsed_ms
         planned_actions.extend(actions)
         applied_versions.append(spec.version)
 
-    should_persist = not dry_run and (
-        baseline
-        or state is None
-        or bool(applied_versions)
-        or (state is not None and state.version == current_version and getattr(state, "checksum", None) == current_checksum and getattr(state, "status", None) != "current")
+    should_persist = not dry_run and not applied_versions and (
+        state is not None
+        and state.version == current_version
+        and getattr(state, "checksum", None) == current_checksum
+        and getattr(state, "status", None) != "current"
     )
     if should_persist:
         _store_state(
@@ -198,7 +254,7 @@ def run_migration_plan(
             version=current_version,
             name=current_name,
             checksum=current_checksum,
-            execution_ms=total_execution_ms if applied_versions else getattr(state, "execution_ms", 0),
+            execution_ms=getattr(state, "execution_ms", 0),
             application_version=application_version,
             status="current",
             applied_at=state.applied_at if state and getattr(state, "applied_at", None) else now_utc(),
@@ -207,12 +263,8 @@ def run_migration_plan(
             company_id=company_id,
         )
 
-    if dry_run:
-        refreshed_state = state
-    else:
-        refreshed_state = session.scalar(select(model).order_by(model.applied_at.desc().nullslast(), model.id.desc())) if should_persist or state is None else state
-    summary = migration_summary(
-        refreshed_state,
+    summary = last_summary or migration_summary(
+        state,
         current_version=current_version,
         current_name=current_name,
         current_checksum=current_checksum,
@@ -248,6 +300,7 @@ def _store_state(
     last_checked_at: datetime,
     last_error: str | None,
     company_id: int | None = None,
+    commit: bool = True,
 ) -> None:
     if state is None and company_id is not None and hasattr(model, "__tablename__"):
         table_name = model.__tablename__
@@ -284,7 +337,8 @@ def _store_state(
             },
         )
         if result.rowcount:
-            session.commit()
+            if commit:
+                session.commit()
             return
     if state is None:
         state = model()
@@ -310,4 +364,5 @@ def _store_state(
         state.last_error = last_error
     if hasattr(state, "updated_at"):
         state.updated_at = now_utc()
-    session.commit()
+    if commit:
+        session.commit()
