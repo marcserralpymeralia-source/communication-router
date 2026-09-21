@@ -19,7 +19,6 @@ from app.db.models import Company, Email, InboundMessage, Mailbox
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.mailboxes.service import get_mailbox, get_or_create_mailbox_sync_state, list_mailboxes, serialize_mailbox
-from scripts.run_mailbox_backfill_once import _safe_database_name, run_backfill_in_context
 from app.mailboxes.pilot_sync import run_pilot_sync
 from app.mailboxes.google_oauth import (
     GOOGLE_OAUTH_STATE_SESSION_KEY,
@@ -62,6 +61,20 @@ EDIT_FIELDS = [
 SECRET_FIELDS = {"imap_password_encrypted", "smtp_password_encrypted"}
 BOOL_FIELDS = {"imap_use_ssl", "auto_sync_enabled", "read_unread_only", "smtp_enabled"}
 BACKFILL_PRODUCTION_CONFIRM = "BACKFILL_PRODUCTION_CONFIRM"
+
+
+def _safe_database_name(database_url: str | None) -> str | None:
+    """Keep the administrative runner out of normal mailbox route startup."""
+    from scripts.run_mailbox_backfill_once import _safe_database_name as safe_database_name
+
+    return safe_database_name(database_url)
+
+
+def run_backfill_in_context(*args, **kwargs):  # noqa: ANN002, ANN003
+    """Load the one-shot runner only when the guarded action is invoked."""
+    from scripts.run_mailbox_backfill_once import run_backfill_in_context as runner
+
+    return runner(*args, **kwargs)
 
 
 def _can_edit(user: TenantUser) -> bool:
