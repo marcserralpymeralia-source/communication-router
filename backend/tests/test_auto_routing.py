@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,10 +19,13 @@ from app.db.database import Base  # noqa: E402
 from app.db.models import (  # noqa: E402
     BackgroundJob,
     Communication,
+    CommunicationAttachment,
     Company,
     Department,
     LLMSettings,
     Mailbox,
+    PromptExecution,
+    RoutingAction,
     RoutingDecision,
 )
 from app.jobs.service import enqueue_job  # noqa: E402
@@ -146,7 +150,14 @@ class AutomaticRoutingTests(unittest.TestCase):
 
             with patch("app.settings.integrations._imap_client", return_value=FakeImapClient(raw_message)) as imap_client:
                 with patch("app.settings.integrations.call_openai") as provider:
-                    result = _fetch_imap_emails(db, mailbox, 1, unread_only=False, mailbox_id=mailbox.id)
+                    result = _fetch_imap_emails(
+                        db,
+                        mailbox,
+                        1,
+                        auto_process=True,
+                        unread_only=False,
+                        mailbox_id=mailbox.id,
+                    )
 
             job = db.scalar(select(BackgroundJob).where(BackgroundJob.job_type == "route_communication"))
             communication = db.scalar(select(Communication))
@@ -156,6 +167,84 @@ class AutomaticRoutingTests(unittest.TestCase):
             self.assertEqual(job.dedupe_key, f"communication:1:{communication.id}")
             imap_client.assert_called_once()
             provider.assert_not_called()
+
+    def test_imap_ingestion_auto_process_false_imports_without_routing(self):
+        raw_message = (
+            b"From: sender@example.com\r\n"
+            b"To: entrada@example.com\r\n"
+            b"Subject: Import only\r\n"
+            b"Message-ID: <import-only@example.com>\r\n"
+            b"\r\n"
+            b"Guardar sin procesar\r\n"
+        )
+        with self.session_factory() as db:
+            mailbox = db.get(Mailbox, 1)
+            mailbox.connected_email = mailbox.email_address
+            mailbox.imap_host = "imap.example.com"
+            mailbox.imap_username = mailbox.email_address
+            mailbox.imap_password_encrypted = encrypt_secret("imap-password")
+            mailbox.read_unread_only = False
+            self._enable_auto_routing(db)
+
+            with patch("app.settings.integrations._imap_client", return_value=FakeImapClient(raw_message)):
+                result = _fetch_imap_emails(
+                    db,
+                    mailbox,
+                    1,
+                    auto_process=False,
+                    unread_only=False,
+                    mailbox_id=mailbox.id,
+                )
+
+            communication = db.scalar(select(Communication))
+            self.assertEqual(result["saved"], 1)
+            self.assertEqual(result["routing_jobs_enqueued"], 0)
+            self.assertEqual(communication.processing_status, "processed")
+            self.assertEqual(communication.routing_status, "unclassified")
+            self.assertEqual(db.query(BackgroundJob).count(), 0)
+            self.assertEqual(db.query(PromptExecution).count(), 0)
+            self.assertEqual(db.query(RoutingDecision).count(), 0)
+            self.assertEqual(db.query(RoutingAction).count(), 0)
+
+    def test_imap_ingestion_auto_process_false_persists_attachment_without_routing(self):
+        message = EmailMessage()
+        message["From"] = "sender@example.com"
+        message["To"] = "entrada@example.com"
+        message["Subject"] = "Import with attachment"
+        message["Message-ID"] = "<import-attachment@example.com>"
+        message.set_content("Guardar adjunto sin procesar")
+        message.add_attachment(b"synthetic attachment", maintype="text", subtype="plain", filename="probe.txt")
+
+        with self.session_factory() as db:
+            mailbox = db.get(Mailbox, 1)
+            mailbox.connected_email = mailbox.email_address
+            mailbox.imap_host = "imap.example.com"
+            mailbox.imap_username = mailbox.email_address
+            mailbox.imap_password_encrypted = encrypt_secret("imap-password")
+            mailbox.read_unread_only = False
+            self._enable_auto_routing(db)
+
+            with patch("app.settings.integrations._imap_client", return_value=FakeImapClient(message.as_bytes())):
+                with patch("app.settings.integrations.save_attachment", return_value="local://tenant-1/probe.txt"):
+                    result = _fetch_imap_emails(
+                        db,
+                        mailbox,
+                        1,
+                        auto_process=False,
+                        unread_only=False,
+                        mailbox_id=mailbox.id,
+                    )
+
+            communication = db.scalar(select(Communication))
+            self.assertEqual(result["saved"], 1)
+            self.assertEqual(result["attachments"], 1)
+            self.assertEqual(db.query(CommunicationAttachment).count(), 1)
+            self.assertEqual(result["routing_jobs_enqueued"], 0)
+            self.assertEqual(db.query(BackgroundJob).count(), 0)
+            self.assertEqual(db.query(PromptExecution).count(), 0)
+            self.assertEqual(db.query(RoutingDecision).count(), 0)
+            self.assertEqual(db.query(RoutingAction).count(), 0)
+            self.assertEqual(communication.routing_status, "unclassified")
 
     def test_enqueue_is_tenant_scoped_idempotent_and_contains_only_ids(self):
         with self.session_factory() as db:

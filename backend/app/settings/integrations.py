@@ -1068,26 +1068,27 @@ def _fetch_imap_emails(
                     )
                     continue
             db.commit()
-            for communication_id in processed_communication_ids:
-                try:
-                    if enqueue_automatic_routing(
-                        db,
-                        company_id=company_id,
-                        communication_id=communication_id,
-                    ) is not None:
-                        routing_jobs_enqueued += 1
-                except Exception:  # Auto-routing must never break IMAP ingestion.
-                    routing_job_errors += 1
-                    db.rollback()
-                    logger.warning(
-                        "email.sync.routing_enqueue_error",
-                        extra={
-                            "event": "email.sync.routing_enqueue_error",
-                            "company_id": company_id,
-                            "communication_id": communication_id,
-                            "error_type": "routing_enqueue_error",
-                        },
-                    )
+            if should_auto_process:
+                for communication_id in processed_communication_ids:
+                    try:
+                        if enqueue_automatic_routing(
+                            db,
+                            company_id=company_id,
+                            communication_id=communication_id,
+                        ) is not None:
+                            routing_jobs_enqueued += 1
+                    except Exception:  # Auto-routing must never break IMAP ingestion.
+                        routing_job_errors += 1
+                        db.rollback()
+                        logger.warning(
+                            "email.sync.routing_enqueue_error",
+                            extra={
+                                "event": "email.sync.routing_enqueue_error",
+                                "company_id": company_id,
+                                "communication_id": communication_id,
+                                "error_type": "routing_enqueue_error",
+                            },
+                        )
             if should_auto_process and saved_email_ids:
                 for email_id in saved_email_ids:
                     enqueue_job(
