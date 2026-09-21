@@ -61,3 +61,16 @@ screenshots/
 videos/
 traces/
 table-sidebar-collapsed-fixed.png
+
+# Routing-learning outputs derived from operational exports. Keep only the
+# human-review artifacts that have been sanitized and selected explicitly.
+docs/routing-learning/generated/01_dataset_quality.md
+docs/routing-learning/generated/02_confusion_analysis.md
+docs/routing-learning/generated/03_department_profiles.md
+docs/routing-learning/generated/04_knowledge_final.json
+docs/routing-learning/generated/05_structured_signals.md
+docs/routing-learning/generated/06_new_departments.md
+docs/routing-learning/generated/07_evaluation_dataset.jsonl
+docs/routing-learning/generated/11_knowledge_approved.json
+docs/routing-learning/generated/12_retrieval_metrics.md
+docs/routing-learning/generated/13_import_dry_run.md
