@@ -99,6 +99,13 @@ def _sanitize_database_url(url: str | None) -> str:
     return f"{scheme}{username}:***@{rest}"
 
 
+def _resolve_release_sha(configured_sha: str | None, *, running_on_vercel: bool, vercel_sha: str | None) -> str:
+    """Prefer the deployment metadata when running inside Vercel."""
+    if running_on_vercel and vercel_sha and vercel_sha.strip():
+        return vercel_sha.strip()
+    return (configured_sha or "").strip() or "unknown"
+
+
 class Settings(BaseSettings):
     app_name: str = "KIBAK"
     app_slug: str = "kibak"
@@ -236,6 +243,11 @@ class Settings(BaseSettings):
             raise ValueError("TENANT_DATABASE_RUNTIME_PORT must be between 1 and 65535")
         running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
         demo_runtime = self.environment == "demo" or running_on_vercel
+        self.release_sha = _resolve_release_sha(
+            self.release_sha,
+            running_on_vercel=running_on_vercel,
+            vercel_sha=os.getenv("VERCEL_GIT_COMMIT_SHA"),
+        )
 
         if self.debug is None:
             self.debug = False

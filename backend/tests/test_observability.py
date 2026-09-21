@@ -153,6 +153,8 @@ class ObservabilityTests(unittest.TestCase):
 
         self.assertTrue(ready["ok"])
         self.assertTrue(ready["tenant_ping"])
+        self.assertIn("release_sha", ready)
+        self.assertIn("release_sha", live)
         self.assertEqual(live["correlation_id"], "corr-3")
         self.assertIn("metrics", live)
         self.assertIn("observability", diagnostics)

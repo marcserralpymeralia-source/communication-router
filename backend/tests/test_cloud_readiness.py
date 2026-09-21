@@ -44,6 +44,42 @@ def staging_env(**overrides: str) -> dict[str, str]:
 
 
 class CloudReadinessTests(unittest.TestCase):
+    def test_vercel_git_sha_takes_precedence_over_legacy_release_sha(self):
+        with patch.dict(
+            os.environ,
+            staging_env(VERCEL="1", VERCEL_GIT_COMMIT_SHA="deployed-sha", RELEASE_SHA="legacy-sha"),
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+        self.assertEqual(settings.release_sha, "deployed-sha")
+
+    def test_release_sha_is_used_without_vercel_metadata(self):
+        with patch.dict(
+            os.environ,
+            staging_env(VERCEL_GIT_COMMIT_SHA="", RELEASE_SHA="configured-sha"),
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+        self.assertEqual(settings.release_sha, "configured-sha")
+
+    def test_non_vercel_runtime_ignores_vercel_metadata(self):
+        with patch.dict(
+            os.environ,
+            staging_env(VERCEL_GIT_COMMIT_SHA="ignored-sha", RELEASE_SHA="configured-sha"),
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+        self.assertEqual(settings.release_sha, "configured-sha")
+
+    def test_release_sha_falls_back_to_unknown(self):
+        with patch.dict(
+            os.environ,
+            staging_env(VERCEL="1", VERCEL_GIT_COMMIT_SHA="", RELEASE_SHA=""),
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+        self.assertEqual(settings.release_sha, "unknown")
+
     def test_staging_requires_secure_explicit_runtime(self):
         with patch.dict(os.environ, staging_env(), clear=True):
             settings = Settings(_env_file=None)
