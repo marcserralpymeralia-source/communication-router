@@ -54,12 +54,12 @@ router = APIRouter(prefix="/settings/mailboxes", tags=["mailboxes"])
 EDIT_FIELDS = [
     "name", "provider", "connection_method", "connected_email", "imap_host", "imap_port", "imap_security",
     "imap_use_ssl", "imap_username", "imap_password_encrypted", "inbox_folder", "mailbox",
-    "read_limit", "polling_frequency_minutes", "auto_sync_enabled", "read_unread_only",
+    "read_limit", "polling_frequency_minutes", "auto_sync_enabled", "auto_process_on_fetch", "read_unread_only",
     "smtp_provider", "smtp_enabled", "smtp_host", "smtp_port", "smtp_security", "smtp_username",
     "smtp_password_encrypted", "from_email", "from_name", "reply_to",
 ]
 SECRET_FIELDS = {"imap_password_encrypted", "smtp_password_encrypted"}
-BOOL_FIELDS = {"imap_use_ssl", "auto_sync_enabled", "read_unread_only", "smtp_enabled"}
+BOOL_FIELDS = {"imap_use_ssl", "auto_sync_enabled", "auto_process_on_fetch", "read_unread_only", "smtp_enabled"}
 BACKFILL_PRODUCTION_CONFIRM = "BACKFILL_PRODUCTION_CONFIRM"
 
 

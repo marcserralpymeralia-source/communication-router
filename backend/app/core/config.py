@@ -178,6 +178,7 @@ class Settings(BaseSettings):
     environment: str = Field(default="development", validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"))
     deployment_mode: str = Field(default="standard", validation_alias="DEPLOYMENT_MODE")
     pilot_free_mode: bool = Field(default=False, validation_alias="PILOT_FREE_MODE")
+    enable_pilot_auto_sync: bool = Field(default=False, validation_alias="ENABLE_PILOT_AUTO_SYNC")
     debug: bool | None = Field(default=None, validation_alias="DEBUG")
     default_company_name: str = "KIBAK Test"
     default_admin_email: str = "admin@kibak.local"

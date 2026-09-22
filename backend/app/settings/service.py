@@ -71,7 +71,11 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
         if hasattr(instance, "smtp_enabled"):
             instance.smtp_enabled = False
         if hasattr(instance, "auto_sync_enabled"):
-            instance.auto_sync_enabled = False
+            if not getattr(get_settings(), "enable_pilot_auto_sync", False):
+                instance.auto_sync_enabled = False
+        if hasattr(instance, "auto_process_on_fetch"):
+            if not getattr(get_settings(), "enable_pilot_auto_sync", False):
+                instance.auto_process_on_fetch = False
         if hasattr(instance, "mark_as_read_after_import"):
             instance.mark_as_read_after_import = False
         if hasattr(instance, "auto_forwarding_enabled"):

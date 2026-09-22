@@ -4,5 +4,9 @@
     "api/index.py": {
       "maxDuration": 800
     }
-  }
+  },
+  "crons": [
+    {"path": "/cron/email-sync", "schedule": "*/1 * * * *"},
+    {"path": "/cron/jobs", "schedule": "*/1 * * * *"}
+  ]
 }

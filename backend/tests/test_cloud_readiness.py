@@ -136,6 +136,20 @@ class CloudReadinessTests(unittest.TestCase):
         self.assertFalse(email.auto_sync_enabled)
         self.assertFalse(email.mark_as_read_after_import)
 
+        email = EmailSettings(company_id=1, smtp_enabled=True, auto_sync_enabled=False, auto_process_on_fetch=False, mark_as_read_after_import=True)
+        with patch("app.settings.service.get_settings", return_value=SimpleNamespace(is_pilot_runtime=True, enable_pilot_auto_sync=True)):
+            update_with_form(email, {"smtp_enabled": "on", "auto_sync_enabled": "on", "auto_process_on_fetch": "on", "mark_as_read_after_import": "on"})
+        self.assertFalse(email.smtp_enabled)
+        self.assertTrue(email.auto_sync_enabled)
+        self.assertTrue(email.auto_process_on_fetch)
+        self.assertFalse(email.mark_as_read_after_import)
+
+        email = EmailSettings(company_id=1, auto_sync_enabled=True, auto_process_on_fetch=True)
+        with patch("app.settings.service.get_settings", return_value=SimpleNamespace(is_pilot_runtime=True, enable_pilot_auto_sync=False)):
+            update_with_form(email, {"auto_sync_enabled": "on", "auto_process_on_fetch": "on"})
+        self.assertFalse(email.auto_sync_enabled)
+        self.assertFalse(email.auto_process_on_fetch)
+
     def test_free_pilot_batch_limit_defaults_to_ten_and_caps_at_twenty(self):
         settings = SimpleNamespace(is_pilot_runtime=True, pilot_batch_default=10, pilot_batch_max=20)
         with patch("app.core.config.get_settings", return_value=settings):
@@ -197,7 +211,10 @@ class DeploymentContractTests(unittest.TestCase):
         config = json.loads((root / "vercel.json").read_text(encoding="utf-8"))
         self.assertIn("from app.main import app", entrypoint)
         self.assertEqual(config["functions"]["api/index.py"]["maxDuration"], 800)
-        self.assertNotIn("crons", config)
+        self.assertEqual(
+            {item["path"] for item in config["crons"]},
+            {"/cron/email-sync", "/cron/jobs"},
+        )
 
 
 class FreePilotLifespanTests(unittest.IsolatedAsyncioTestCase):

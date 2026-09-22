@@ -165,6 +165,13 @@
                     <input name="auto_sync_enabled" type="checkbox" value="on" {% if mailbox.auto_sync_enabled %}checked{% endif %}>
                     Sincronización automática
                   </label>
+                  {% if app_settings.is_pilot_runtime %}
+                    <label class="mailbox-checkbox-label">
+                      <input type="hidden" name="auto_process_on_fetch" value="off">
+                      <input name="auto_process_on_fetch" type="checkbox" value="on" {% if mailbox.auto_process_on_fetch %}checked{% endif %}>
+                      Procesar automáticamente en simulación
+                    </label>
+                  {% endif %}
                   <label class="mailbox-checkbox-label">
                     <input type="hidden" name="read_unread_only" value="off">
                     <input name="read_unread_only" type="checkbox" value="on" {% if mailbox.read_unread_only %}checked{% endif %}>
