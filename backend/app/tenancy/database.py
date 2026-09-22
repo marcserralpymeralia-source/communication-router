@@ -64,8 +64,6 @@ def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
 
     table_names = set(inspect(engine).get_table_names())
     missing_tables = sorted(KIBAK_TENANT_TABLES - table_names)
-    unexpected_tables = sorted(table_names - KIBAK_TENANT_TABLES)
-    schema_matches = not missing_tables and not unexpected_tables
     with engine.connect() as conn:
         row = conn.execute(
             text(
@@ -82,6 +80,12 @@ def _validate_kibak_baseline(engine, company_id: int | None) -> dict:
         version = row["version"] if row else None
         raise RuntimeError(f"Version desconocida en schema_migrations: {version}")
     evolved = row["version"] == CURRENT_KIBAK_TENANT_SCHEMA_VERSION
+    expected_tables = set(KIBAK_TENANT_TABLES)
+    if evolved:
+        # 2026.09.18.1 adds this table to the clean KIBAK baseline.
+        expected_tables.add("routing_decision_destinations")
+    unexpected_tables = sorted(table_names - expected_tables)
+    schema_matches = not missing_tables and not unexpected_tables
     expected_checksum = CURRENT_KIBAK_TENANT_SCHEMA_CHECKSUM if evolved else KIBAK_TENANT_BASELINE_VERSION
     return {
         **dict(row),

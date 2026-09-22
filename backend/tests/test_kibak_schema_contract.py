@@ -108,6 +108,31 @@ class KibakSchemaContractTests(unittest.TestCase):
             self.assertIn("worker_heartbeats", inspect(engine).get_table_names())
             self.assertNotIn("orders", inspect(engine).get_table_names())
 
+    def test_evolved_kibak_schema_accepts_additive_destination_table(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            engine = create_engine(f"sqlite:///{Path(tempdir, 'tenant.db')}")
+            self.engines.append(engine)
+            create_kibak_tenant_schema(
+                engine,
+                company_id=7,
+                company_name="KIBAK Test",
+                confirmation=KIBAK_BASELINE_CONFIRMATION,
+            )
+            Session = sessionmaker(bind=engine)
+            with Session() as db:
+                run_migration_plan(
+                    engine,
+                    db,
+                    TenantSchemaMigration,
+                    KIBAK_TENANT_SCHEMA_MIGRATIONS,
+                    company_id=7,
+                    allowed_legacy_versions={KIBAK_TENANT_BASELINE_VERSION},
+                )
+            report = _validate_kibak_baseline(engine, 7)
+            self.assertEqual(report["version"], CURRENT_KIBAK_TENANT_SCHEMA_VERSION)
+            self.assertTrue(report["is_current"])
+            self.assertEqual(report["unexpected_tables"], [])
+
     def test_tenant_migration_report_uses_schema_validation_for_kibak_postgres(self):
         bind = SimpleNamespace(url=SimpleNamespace(drivername="postgresql"))
         db = SimpleNamespace(get_bind=lambda: bind)
