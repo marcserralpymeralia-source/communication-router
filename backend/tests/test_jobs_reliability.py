@@ -218,6 +218,7 @@ class JobsReliabilityTests(unittest.TestCase):
             kwargs = backfill.call_args.kwargs
             self.assertEqual(kwargs["batch_size"], 1)
             self.assertTrue(kwargs["stop_after_batch"])
+            self.assertTrue(kwargs["preserve_normal_cursor"])
 
             jobs = db.scalars(
                 select(BackgroundJob)
@@ -296,6 +297,7 @@ class JobsReliabilityTests(unittest.TestCase):
             self.assertEqual(args[3], "2026-09-15")
             self.assertEqual(args[4], "2026-09-22")
             self.assertEqual(kwargs["batch_size"], 1)
+            self.assertTrue(kwargs["preserve_normal_cursor"])
         finally:
             db.close()
 

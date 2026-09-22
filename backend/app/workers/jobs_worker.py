@@ -284,6 +284,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 sync_session=master_db,
                 mailbox_id=mailbox_id,
                 unbounded=unbounded,
+                preserve_normal_cursor=True,
             )
 
             consumed = max(int(result.get("batch_count") or 0), 0)
