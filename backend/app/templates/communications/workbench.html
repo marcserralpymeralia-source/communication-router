@@ -56,7 +56,10 @@
         <tbody>
           {% for row in items %}
             <tr class="communications-row communications-row--{{ row.status_key }}">
-              <td class="communication-date">{{ row.communication.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if row.communication.received_at else "Sin fecha" }}</td>
+              <td class="communication-date">
+                {{ row.display_received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if row.display_received_at else "Sin fecha" }}
+                {% if row.display_date_is_imported %}<span class="communication-secondary">Fecha de importación</span>{% endif %}
+              </td>
               <td>
                 <strong class="communication-sender">{{ row.communication.sender_name or "Sin remitente" }}</strong>
                 <span class="communication-secondary">{{ row.communication.sender_email or "Email no disponible" }}</span>
@@ -79,6 +82,7 @@
                 {% else %}
                   <span class="muted">Sin departamento</span>
                 {% endif %}
+                {% if row.proposed_destination_email %}<span class="communication-secondary">Propuesta de reenvío: {{ row.proposed_destination_email }}</span>{% endif %}
               </td>
               <td>
                 {% if row.decision %}

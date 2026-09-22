@@ -144,9 +144,24 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
         decision = next((item for item in communication_decisions if item.status != "superseded"), None)
         action = actions_by_communication.get(communication.id)
         destinations = destinations_by_decision.get(decision.id, []) if decision else []
+        proposed_department = departments.get(decision.department_id) if decision and decision.department_id else None
+        final_department = departments.get(decision.final_department_id) if decision and decision.final_department_id else None
+        displayed_department = final_department or proposed_department
+        display_destination_email = (
+            action.destination_email
+            if action is not None and action.destination_email
+            else displayed_department.destination_email
+            if displayed_department is not None
+            else None
+        )
         additional_destinations = [
             {
                 "department": departments.get(destination.department_id),
+                "destination_email": (
+                    departments.get(destination.department_id).destination_email
+                    if departments.get(destination.department_id)
+                    else None
+                ),
                 "role": destination.role,
                 "role_label": DESTINATION_ROLE_LABELS.get(destination.role, destination.role),
                 "position": destination.position,
@@ -158,11 +173,14 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
         rows.append(
             {
                 "communication": communication,
+                "display_received_at": communication.received_at or communication.created_at,
+                "display_date_is_imported": communication.received_at is None,
                 "mailbox": mailboxes.get(communication.mailbox_id),
                 "decision": decision,
-                "proposed_department": departments.get(decision.department_id) if decision and decision.department_id else None,
+                "proposed_department": proposed_department,
+                "proposed_destination_email": display_destination_email,
                 "alternative_department": departments.get(decision.alternative_department_id) if decision and decision.alternative_department_id else None,
-                "final_department": departments.get(decision.final_department_id) if decision and decision.final_department_id else None,
+                "final_department": final_department,
                 "forward_action": action,
                 "status_key": status_key,
                 "status_label": status_label,

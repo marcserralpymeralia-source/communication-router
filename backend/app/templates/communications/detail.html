@@ -11,7 +11,7 @@
     </div>
     <div class="communication-detail-status">
       <span class="badge {{ row.status_class }}">{{ row.status_label }}</span>
-      <span class="muted">{{ communication.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if communication.received_at else "Sin fecha" }}</span>
+      <span class="muted">{{ row.display_received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") if row.display_received_at else "Sin fecha" }}{% if row.display_date_is_imported %} · Fecha de importación{% endif %}</span>
     </div>
   </header>
 
@@ -75,6 +75,7 @@
         <div class="analysis-destination-block">
           <span class="communication-field-label">Departamento recomendado</span>
           <strong>{{ row.proposed_department.name if row.proposed_department else "Sin departamento" }}</strong>
+          {% if row.proposed_destination_email %}<span class="communication-secondary">Propuesta de reenvío: {{ row.proposed_destination_email }}</span>{% endif %}
           {% if row.final_department and row.final_department.id != (row.proposed_department.id if row.proposed_department else none) %}<span class="analysis-final-destination">Final: {{ row.final_department.name }}</span>{% endif %}
         </div>
         {% if row.additional_destinations %}
@@ -82,7 +83,7 @@
             <span class="communication-field-label">También intervienen</span>
             <ul>
               {% for destination in row.additional_destinations if destination.department %}
-                <li><strong>{{ destination.department.name }}</strong><span>· {{ destination.role_label }}</span></li>
+                <li><strong>{{ destination.department.name }}</strong><span>· {{ destination.role_label }}</span>{% if destination.destination_email %}<span class="communication-secondary">{{ destination.destination_email }}</span>{% endif %}</li>
               {% endfor %}
             </ul>
           </div>

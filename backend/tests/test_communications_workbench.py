@@ -93,6 +93,7 @@ class CommunicationsWorkbenchTests(unittest.TestCase):
         self.assertIn("Buzón receptor", response.text)
         self.assertIn("Entrega retrasada", response.text)
         self.assertIn("Logística", response.text)
+        self.assertIn("Propuesta de reenvío: logistica@example.com", response.text)
         self.assertIn("Pendiente de revisión", response.text)
         self.assertIn("94%", response.text)
         self.assertIn("Buscar por remitente, asunto o departamento", response.text)
@@ -217,6 +218,7 @@ class CommunicationsWorkbenchTests(unittest.TestCase):
             "Incidencia Entrega",
             "Logística",
             "Comercial",
+            "Propuesta de reenvío: comercial@example.com",
             "94%",
             "albaran.pdf",
             "Departamento cambiado",
