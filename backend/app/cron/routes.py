@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hmac
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -33,7 +34,9 @@ def _cron_authorized(request: Request) -> None:
         or request.headers.get("authorization")
         or ""
     ).strip()
-    if expected and provided == expected:
+    if provided.lower().startswith("bearer "):
+        provided = provided[7:].strip()
+    if expected and provided and hmac.compare_digest(provided, expected):
         return
     if not expected:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cron secret no configurado.")

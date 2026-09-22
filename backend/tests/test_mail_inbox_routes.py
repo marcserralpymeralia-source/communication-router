@@ -86,6 +86,32 @@ class MailInboxRoutesTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_jobs_cron_accepts_vercel_bearer_secret(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client, patch(
+                "app.cron.routes.get_settings",
+                return_value=SimpleNamespace(cron_secret="cron-test-secret"),
+            ), patch(
+                "app.cron.routes.run_worker_cycle",
+                return_value={
+                    "tenants": 1,
+                    "recovered": 0,
+                    "attempted": 1,
+                    "processed": 1,
+                    "blocked": 0,
+                },
+            ) as worker:
+                response = client.get(
+                    "/cron/jobs",
+                    headers={"authorization": "Bearer cron-test-secret"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            worker.assert_called_once_with(max_jobs=1)
+        finally:
+            fixture.cleanup()
+
     def test_mail_inbox_page_and_detail_are_available(self):
         fixture = build_performance_fixture("small")
         SessionLocal = _tenant_session(fixture.tenant_path)
