@@ -1761,7 +1761,13 @@ def send_test_email(settings: EmailSettings, to_email: str, subject: str, messag
         return {"ok": False, "error_type": classify_integration_error(exc), "message": f"Error SMTP: {exc}"}
 
 
-def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict:
+def call_openai(
+    settings: LLMSettings,
+    messages: list[dict],
+    model: str,
+    *,
+    response_format: dict | None = None,
+) -> dict:
     validation = validate_openai_config(settings)
     if not validation["ok"]:
         return {"ok": False, "error_type": validation["error_type"], "message": validation["message"]}
@@ -1771,6 +1777,8 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
         "model": model,
         "messages": messages,
     }
+    if response_format is not None:
+        payload["response_format"] = response_format
     payload[completion_token_parameter(model)] = settings.max_tokens
     if supports_custom_temperature(model):
         payload["temperature"] = settings.temperature

@@ -84,7 +84,10 @@ class RoutingLLMRuntime:
                     "error_type": "disabled",
                     "message": "El runtime de IA esta deshabilitado para este tenant.",
                 }
-            return self._provider()(current_settings, messages, model)
+            provider = self._provider()
+            if self.provider_call is None:
+                return provider(current_settings, messages, model, response_format={"type": "json_object"})
+            return provider(current_settings, messages, model)
 
         result = run_prompt_execution(
             self.db,

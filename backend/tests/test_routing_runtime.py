@@ -191,6 +191,17 @@ class RoutingLLMRuntimeTests(unittest.TestCase):
                 self.assertEqual(execution.output_status, "invalid_configuration")
                 self.assertIsNone(settings.api_key_encrypted)
 
+    def test_real_openai_runtime_requests_json_object_output(self):
+        with patch("app.settings.integrations.call_openai", return_value={"ok": True, "content": self._content()}) as provider:
+            with self.session_factory() as db:
+                db.add(LLMSettings(company_id=1, agent_enabled=True))
+                db.flush()
+                runtime = RoutingLLMRuntime(db, 1)
+                runtime.complete(system_prompt="ignored", user_prompt="contexto", output_schema={})
+
+        provider.assert_called_once()
+        self.assertEqual(provider.call_args.kwargs["response_format"], {"type": "json_object"})
+
 
 if __name__ == "__main__":
     unittest.main()
