@@ -67,14 +67,19 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
             setattr(instance, key, float(value or 0))
         else:
             setattr(instance, key, value)
-    if get_settings().is_pilot_runtime:
+    settings = get_settings()
+    pilot_safe_runtime = settings.is_pilot_runtime or (
+        str(getattr(settings, "app_slug", "")).strip().lower() == "kibak"
+        and getattr(settings, "enable_pilot_auto_sync", False)
+    )
+    if pilot_safe_runtime:
         if hasattr(instance, "smtp_enabled"):
             instance.smtp_enabled = False
         if hasattr(instance, "auto_sync_enabled"):
-            if not getattr(get_settings(), "enable_pilot_auto_sync", False):
+            if not getattr(settings, "enable_pilot_auto_sync", False):
                 instance.auto_sync_enabled = False
         if hasattr(instance, "auto_process_on_fetch"):
-            if not getattr(get_settings(), "enable_pilot_auto_sync", False):
+            if not getattr(settings, "enable_pilot_auto_sync", False):
                 instance.auto_process_on_fetch = False
         if hasattr(instance, "mark_as_read_after_import"):
             instance.mark_as_read_after_import = False
