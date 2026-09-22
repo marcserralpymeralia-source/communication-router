@@ -13,10 +13,11 @@ from app.db.database import Base
 from app.db.models import Communication, CommunicationAttachment, Company, Email, InboundMessage, Mailbox
 from app.mailboxes.service import get_or_create_mailbox_sync_state
 from app.master.database import MasterBase
+from app.master.models import MailboxSyncState
 from app.communications.service import create_or_update_communication_from_email, get_communication, recipient_values
 from app.communications.routes import communication_detail, communications_list
 from app.master.service import TenantRole, TenantUser
-from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_received_at
+from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_received_at, _sync_state_matches_scope, _update_sync_checkpoint
 
 
 class FakeImapClient:
@@ -56,6 +57,40 @@ class CommunicationFoundationTests(unittest.TestCase):
             _message_received_at(message),
             datetime(2026, 9, 14, 7, 30, tzinfo=timezone.utc),
         )
+
+    def test_mailbox_sync_state_uses_mailbox_id_without_legacy_mailbox_field(self):
+        with self.master_session() as db:
+            state = MailboxSyncState(company_id=1, mailbox_id=1, last_seen_uid="41")
+            db.add(state)
+            db.commit()
+
+            scope = {
+                "provider": "microsoft365",
+                "host": "outlook.office365.com",
+                "username": "mailbox@example.com",
+                "connected_email": "mailbox@example.com",
+                "mailbox": "INBOX",
+            }
+            self.assertTrue(_sync_state_matches_scope(state, scope, None))
+            _update_sync_checkpoint(
+                state,
+                db,
+                mailbox="INBOX",
+                uidvalidity="777",
+                source_provider="microsoft365",
+                source_host="outlook.office365.com",
+                source_username="mailbox@example.com",
+                source_connected_email="mailbox@example.com",
+                last_uid="42",
+                saved=1,
+                duplicates=0,
+                attachments_saved=0,
+                found=1,
+                status="idle",
+            )
+
+            self.assertEqual(state.last_seen_uid, "42")
+            self.assertEqual(state.status, "idle")
     def setUp(self):
         self.tenant_engine = create_engine("sqlite:///:memory:")
         self.master_engine = create_engine("sqlite:///:memory:")

@@ -575,10 +575,11 @@ def _current_imap_scope(settings: EmailSettings, mailbox: str) -> dict[str, str 
     }
 
 
-def _sync_state_matches_scope(sync_state: EmailSyncState | None, scope: dict[str, str | None], uidvalidity: str | None) -> bool:
+def _sync_state_matches_scope(sync_state: EmailSyncState | MailboxSyncState | None, scope: dict[str, str | None], uidvalidity: str | None) -> bool:
     if not sync_state or not sync_state.last_seen_uid:
         return False
-    if sync_state.mailbox and sync_state.mailbox != scope["mailbox"]:
+    stored_mailbox = getattr(sync_state, "mailbox", None)
+    if stored_mailbox and stored_mailbox != scope["mailbox"]:
         return False
     if sync_state.uidvalidity and uidvalidity and sync_state.uidvalidity != uidvalidity:
         return False
@@ -647,7 +648,8 @@ def _update_sync_checkpoint(
     if not sync_state or not sync_session:
         return
     now = datetime.now(timezone.utc)
-    sync_state.mailbox = mailbox or sync_state.mailbox
+    if hasattr(sync_state, "mailbox"):
+        sync_state.mailbox = mailbox or sync_state.mailbox
     sync_state.uidvalidity = uidvalidity or sync_state.uidvalidity
     sync_state.source_provider = source_provider or sync_state.source_provider
     sync_state.source_host = source_host or sync_state.source_host
