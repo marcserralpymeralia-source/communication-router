@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.auth.dependencies import require_tenant_role
 from app.core.config import get_settings
 from app.core.templating import templates
-from app.db.models import BackgroundJob, Communication, Mailbox, RoutingAction
+from app.db.models import (
+    BackgroundJob,
+    Communication,
+    Department,
+    Mailbox,
+    PromptExecution,
+    RoutingAction,
+    RoutingDecision,
+)
 from app.master.database import get_master_db
 from app.master.models import MailboxSyncState
 from app.master.service import TenantUser
@@ -58,6 +66,89 @@ def _relative_label(value: datetime | None) -> str:
     return f"Hace {hours} h"
 
 
+def _communication_metrics(db: Session, company_id: int) -> dict[str, object]:
+    company_filter = Communication.company_id == company_id
+    recent_since = datetime.now(timezone.utc) - timedelta(hours=24)
+    imported_total = db.scalar(select(func.count(Communication.id)).where(company_filter)) or 0
+    received_total = db.scalar(
+        select(func.count(Communication.id)).where(company_filter, Communication.received_at.is_not(None))
+    ) or 0
+    missing_received_at = imported_total - received_total
+    recent_imported = db.scalar(
+        select(func.count(Communication.id)).where(company_filter, Communication.created_at >= recent_since)
+    ) or 0
+    recent_received = db.scalar(
+        select(func.count(Communication.id)).where(company_filter, Communication.received_at >= recent_since)
+    ) or 0
+    return {
+        "imported_total": imported_total,
+        "missing_received_at": missing_received_at,
+        "recent_imported": recent_imported,
+        "recent_received": recent_received,
+        "latest_received_at": db.scalar(select(func.max(Communication.received_at)).where(company_filter)),
+        "latest_import_at": db.scalar(select(func.max(Communication.created_at)).where(company_filter)),
+    }
+
+
+def _routing_metrics(db: Session, company_id: int) -> dict[str, object]:
+    company_filter = RoutingDecision.company_id == company_id
+    primary_department = aliased(Department)
+    alternative_department = aliased(Department)
+    final_department = aliased(Department)
+    coverage_query = (
+        select(func.count(func.distinct(RoutingDecision.id)))
+        .select_from(RoutingDecision)
+        .outerjoin(
+            primary_department,
+            and_(
+                primary_department.company_id == company_id,
+                primary_department.id == RoutingDecision.department_id,
+            ),
+        )
+        .outerjoin(
+            alternative_department,
+            and_(
+                alternative_department.company_id == company_id,
+                alternative_department.id == RoutingDecision.alternative_department_id,
+            ),
+        )
+        .outerjoin(
+            final_department,
+            and_(
+                final_department.company_id == company_id,
+                final_department.id == RoutingDecision.final_department_id,
+            ),
+        )
+        .where(
+            company_filter,
+            or_(
+                primary_department.destination_email.is_not(None),
+                alternative_department.destination_email.is_not(None),
+                final_department.destination_email.is_not(None),
+            ),
+        )
+    )
+    total = db.scalar(select(func.count(RoutingDecision.id)).where(company_filter)) or 0
+    coverage = db.scalar(coverage_query) or 0
+    return {
+        "total": total,
+        "with_destination": coverage,
+        "coverage_percent": round((coverage / total) * 100, 1) if total else None,
+        "pending_review": db.scalar(
+            select(func.count(RoutingDecision.id)).where(company_filter, RoutingDecision.requires_review.is_(True))
+        ) or 0,
+        "without_primary": db.scalar(
+            select(func.count(RoutingDecision.id)).where(company_filter, RoutingDecision.department_id.is_(None))
+        ) or 0,
+        "with_alternative": db.scalar(
+            select(func.count(RoutingDecision.id)).where(
+                company_filter, RoutingDecision.alternative_department_id.is_not(None)
+            )
+        ) or 0,
+        "prompt_executions": db.scalar(select(func.count(PromptExecution.id)).where(PromptExecution.company_id == company_id)) or 0,
+    }
+
+
 @router.get("")
 def operations_page(
     request: Request,
@@ -85,6 +176,8 @@ def operations_page(
             select(func.count(RoutingAction.id)).where(RoutingAction.company_id == user.company_id, RoutingAction.status == "simulated")
         ) or 0,
     }
+    communication_metrics = _communication_metrics(db, user.company_id)
+    routing_metrics = _routing_metrics(db, user.company_id)
     jobs = db.scalars(
         select(BackgroundJob)
         .where(company_filter)
@@ -142,6 +235,8 @@ def operations_page(
             "user": user,
             "title": "Operaciones",
             "counts": counts,
+            "communication_metrics": communication_metrics,
+            "routing_metrics": routing_metrics,
             "recent_jobs": recent_jobs,
             "sync_rows": sync_rows,
             "worker": {

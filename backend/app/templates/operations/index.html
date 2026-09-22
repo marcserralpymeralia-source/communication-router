@@ -16,6 +16,31 @@
   </div>
 
   <div class="operations-grid">
+    <section class="panel operations-panel">
+      <div class="section-title-row"><div><span class="kibak-eyebrow">Entrada</span><h3>Importación de comunicaciones</h3></div><span class="badge">Últimas 24 h</span></div>
+      <div class="operations-metric-list">
+        <div><span>Total importadas</span><strong>{{ communication_metrics.imported_total }}</strong></div>
+        <div><span>Importadas en 24 h</span><strong>{{ communication_metrics.recent_imported }}</strong></div>
+        <div><span>Recibidas en 24 h</span><strong>{{ communication_metrics.recent_received }}</strong></div>
+        <div><span>Sin fecha de recepción</span><strong class="{% if communication_metrics.missing_received_at %}metric-warning{% endif %}">{{ communication_metrics.missing_received_at }}</strong></div>
+      </div>
+      <p class="operations-timestamp">Último correo recibido: <strong>{{ communication_metrics.latest_received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Sin fecha") }}</strong></p>
+      <p class="operations-timestamp">Última importación: <strong>{{ communication_metrics.latest_import_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Sin actividad") }}</strong></p>
+    </section>
+    <section class="panel operations-panel">
+      <div class="section-title-row"><div><span class="kibak-eyebrow">Routing</span><h3>Cobertura de propuestas</h3></div><span class="badge">{{ routing_metrics.total }} decisiones</span></div>
+      <div class="operations-metric-list">
+        <div><span>Con destino configurado</span><strong>{% if routing_metrics.coverage_percent is not none %}{{ routing_metrics.coverage_percent }}%{% else %}N/D{% endif %}</strong></div>
+        <div><span>Pendientes de revisión</span><strong>{{ routing_metrics.pending_review }}</strong></div>
+        <div><span>Sin departamento principal</span><strong class="{% if routing_metrics.without_primary %}metric-warning{% endif %}">{{ routing_metrics.without_primary }}</strong></div>
+        <div><span>Con alternativa disponible</span><strong>{{ routing_metrics.with_alternative }}</strong></div>
+      </div>
+      <p class="operations-timestamp">Prompt executions registradas: <strong>{{ routing_metrics.prompt_executions }}</strong></p>
+      <p class="muted">La cobertura incluye destino principal, final o alternativa; no activa reenvíos.</p>
+    </section>
+  </div>
+
+  <div class="operations-grid">
     <section class="panel operations-panel"><div class="section-title-row"><div><span class="kibak-eyebrow">Workers</span><h3>Actividad de sincronización</h3></div><span class="module-state {% if worker.status == 'Activo' %}ready{% else %}pending{% endif %}">{{ worker.status }}</span></div><p class="muted">Última actividad: {{ worker.last_activity }}</p><div class="operations-sync-list">{% for item in sync_rows %}<div class="operations-sync-row"><div><strong>{{ item.name }}</strong><span>{{ item.status_label }} · {{ item.last_activity }}</span></div><span class="badge {% if item.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activo" if item.enabled else "Pausado" }}</span>{% if item.error %}<small class="operation-error">{{ item.error }}</small>{% endif %}</div>{% else %}<div class="empty-state compact-empty"><h4>No hay buzones sincronizables.</h4><p>Conecta un buzón para ver su actividad aquí.</p><a class="button secondary compact-button" href="/settings/mailboxes">Configurar buzón</a></div>{% endfor %}</div></section>
     <section class="panel operations-panel"><div class="section-title-row"><div><span class="kibak-eyebrow">Últimas ejecuciones</span><h3>Trabajos recientes</h3></div><span class="badge">{{ recent_jobs|length }}</span></div><div class="operations-job-list">{% for job in recent_jobs %}<div class="operations-job-row"><div><strong>{{ job.type }}</strong><span>Job #{{ job.id }} · {{ job.updated_at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</span>{% if job.error %}<small class="operation-error">{{ job.error }}</small>{% endif %}</div><div class="operations-job-status"><span class="badge">{{ job.status_label }}</span><small>{{ job.operation_status }}</small>{% if job.retryable %}<form method="post" action="/jobs/{{ job.id }}/retry"><button class="button secondary compact-button" type="submit">Reintentar</button></form>{% endif %}</div></div>{% else %}<div class="empty-state compact-empty"><h4>No hay incidencias operativas.</h4><p>Las ejecuciones aparecerán aquí cuando haya actividad.</p></div>{% endfor %}</div></section>
   </div>

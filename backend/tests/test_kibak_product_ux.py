@@ -31,6 +31,9 @@ class KibakProductUxRouteTests(unittest.TestCase):
         self.assertIn("Automatización", onboarding.text)
         self.assertEqual(operations.status_code, 200)
         self.assertIn("Centro de operaciones", operations.text)
+        self.assertIn("Importación de comunicaciones", operations.text)
+        self.assertIn("Cobertura de propuestas", operations.text)
+        self.assertIn("Último correo recibido", operations.text)
         self.assertNotIn("payload_json", operations.text)
         self.assertNotIn("stack trace", operations.text.lower())
 

@@ -8010,6 +8010,13 @@ dialog.settings-drawer .grid-4-cols {
 .operations-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .operations-panel { min-width: 0; padding: 18px; }
 .operations-sync-list, .operations-job-list { display: grid; gap: 2px; margin-top: 14px; }
+.operations-metric-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.operations-metric-list div { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); }
+.operations-metric-list span, .operations-timestamp { color: var(--muted); font-size: 12px; }
+.operations-metric-list strong { color: var(--text); font-size: 20px; }
+.metric-warning { color: var(--danger, #b42318) !important; }
+.operations-timestamp { margin: 12px 0 0; }
+.operations-timestamp strong { color: var(--text); font-weight: 700; }
 .operations-sync-row, .operations-job-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
 .operations-sync-row > div, .operations-job-row > div:first-child { display: grid; gap: 3px; min-width: 0; }
 .operations-sync-row span, .operations-job-row span, .operations-job-row small { color: var(--muted); font-size: 11px; }
@@ -8037,6 +8044,7 @@ dialog.settings-drawer .grid-4-cols {
   .onboarding-step .button { grid-column: 2; justify-self: start; }
   .onboarding-next { align-items: flex-start; flex-direction: column; }
   .pagination-row { align-items: flex-start; flex-direction: column; }
+  .operations-metric-list { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Communications demo workspace */
@@ -9176,4 +9184,3 @@ td.communication-date,
     grid-template-columns: repeat(2, 1fr);
   }
 }
-
