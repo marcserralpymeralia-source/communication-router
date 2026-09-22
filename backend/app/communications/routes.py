@@ -146,7 +146,8 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
         destinations = destinations_by_decision.get(decision.id, []) if decision else []
         proposed_department = departments.get(decision.department_id) if decision and decision.department_id else None
         final_department = departments.get(decision.final_department_id) if decision and decision.final_department_id else None
-        displayed_department = final_department or proposed_department
+        alternative_department = departments.get(decision.alternative_department_id) if decision and decision.alternative_department_id else None
+        displayed_department = final_department or proposed_department or alternative_department
         display_destination_email = (
             action.destination_email
             if action is not None and action.destination_email
@@ -179,7 +180,8 @@ def _workbench_rows(db: Session, company_id: int, items: list) -> list[dict]:  #
                 "decision": decision,
                 "proposed_department": proposed_department,
                 "proposed_destination_email": display_destination_email,
-                "alternative_department": departments.get(decision.alternative_department_id) if decision and decision.alternative_department_id else None,
+                "alternative_department": alternative_department,
+                "display_department": displayed_department,
                 "final_department": final_department,
                 "forward_action": action,
                 "status_key": status_key,

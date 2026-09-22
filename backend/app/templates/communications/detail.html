@@ -74,8 +74,9 @@
         </div>
         <div class="analysis-destination-block">
           <span class="communication-field-label">Departamento recomendado</span>
-          <strong>{{ row.proposed_department.name if row.proposed_department else "Sin departamento" }}</strong>
+          <strong>{{ row.proposed_department.name if row.proposed_department else row.alternative_department.name if row.alternative_department else "Sin departamento" }}</strong>
           {% if row.proposed_destination_email %}<span class="communication-secondary">Propuesta de reenvío: {{ row.proposed_destination_email }}</span>{% endif %}
+          {% if not row.proposed_department and row.alternative_department %}<span class="communication-secondary">Alternativa para revisión</span>{% endif %}
           {% if row.final_department and row.final_department.id != (row.proposed_department.id if row.proposed_department else none) %}<span class="analysis-final-destination">Final: {{ row.final_department.name }}</span>{% endif %}
         </div>
         {% if row.additional_destinations %}

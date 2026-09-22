@@ -79,6 +79,9 @@
                 {% elif row.proposed_department %}
                   <span class="communication-department">{{ row.proposed_department.name }}</span>
                   <span class="communication-secondary">Propuesto</span>
+                {% elif row.alternative_department %}
+                  <span class="communication-department">{{ row.alternative_department.name }}</span>
+                  <span class="communication-secondary">Alternativa para revisión</span>
                 {% else %}
                   <span class="muted">Sin departamento</span>
                 {% endif %}

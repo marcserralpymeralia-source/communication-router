@@ -147,6 +147,34 @@ class CommunicationsWorkbenchTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(expected, response.text)
 
+    def test_workbench_shows_alternative_destination_when_primary_requires_review(self):
+        _user_id, department_id, alternative_id, mailbox_id = self._seed_workspace()
+        with self.session_factory() as db:
+            communication = self._communication(db, mailbox_id, "Mantenimiento pendiente", routing_status="pending_review")
+            db.add(
+                RoutingDecision(
+                    company_id=1,
+                    communication_id=communication.id,
+                    department_id=None,
+                    alternative_department_id=alternative_id,
+                    category="mantenimiento",
+                    confidence=0.61,
+                    requires_review=True,
+                    reason="Requiere revisión humana.",
+                    ambiguity_reason="Hay más de un destino plausible.",
+                    status="pending_review",
+                    source="agent",
+                )
+            )
+            db.commit()
+
+        with performance_test_client(self.fixture) as client:
+            response = client.get("/communications/workbench")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Alternativa para revisión", response.text)
+        self.assertIn("Propuesta de reenvío: comercial@example.com", response.text)
+
     def test_detail_shows_original_message_analysis_correction_timeline_and_forwarding(self):
         user_id, department_id, alternative_id, mailbox_id = self._seed_workspace()
         with self.session_factory() as db:
