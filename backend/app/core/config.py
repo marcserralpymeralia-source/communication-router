@@ -52,6 +52,20 @@ def _split_csv(raw_value: str | None) -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
+def _vercel_runtime_hosts() -> list[str]:
+    hosts: list[str] = []
+    for variable in ("VERCEL_URL", "VERCEL_BRANCH_URL", "VERCEL_PROJECT_PRODUCTION_URL"):
+        raw_value = (os.getenv(variable) or "").strip()
+        if not raw_value:
+            continue
+        parsed = urlsplit(raw_value if "://" in raw_value else f"//{raw_value}")
+        if parsed.hostname and not parsed.username and not parsed.password and not parsed.path.strip("/") and not parsed.query and not parsed.fragment:
+            hostname = parsed.hostname.lower()
+            if hostname not in hosts:
+                hosts.append(hostname)
+    return hosts
+
+
 def _derive_fernet_key(source: str) -> str:
     digest = hashlib.sha256(source.encode()).digest()
     return base64.urlsafe_b64encode(digest).decode()
@@ -405,6 +419,10 @@ class Settings(BaseSettings):
     @property
     def allowed_hosts(self) -> list[str]:
         hosts = _split_csv(self.allowed_hosts_raw)
+        if os.getenv("VERCEL") == "1" or os.getenv("VERCEL_ENV"):
+            for hostname in _vercel_runtime_hosts():
+                if hostname not in hosts:
+                    hosts.append(hostname)
         if hosts:
             return hosts
         if self.environment in {"development", "test"}:

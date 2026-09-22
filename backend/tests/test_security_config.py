@@ -113,6 +113,21 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertTrue(settings.cors_allowed_origins)
         self.assertTrue(settings.seed_demo_data)
 
+    def test_vercel_runtime_hosts_are_added_without_wildcard(self):
+        vercel_env = {
+            "APP_ENV": "production",
+            "VERCEL": "1",
+            "VERCEL_URL": "kibak-pilot-deployment.vercel.app",
+            "VERCEL_BRANCH_URL": "kibak-pilot-git-feature.vercel.app",
+            "VERCEL_PROJECT_PRODUCTION_URL": "kibak-pilot.vercel.app",
+        }
+        with patch.dict(os.environ, vercel_env, clear=False):
+            settings = _load_settings(vercel_env)
+            self.assertIn("kibak-pilot-deployment.vercel.app", settings.allowed_hosts)
+            self.assertIn("kibak-pilot-git-feature.vercel.app", settings.allowed_hosts)
+            self.assertIn("kibak-pilot.vercel.app", settings.allowed_hosts)
+            self.assertNotIn("*", settings.allowed_hosts)
+
     def test_meta_embedded_signup_requires_https_and_keeps_server_secrets_redacted(self):
         meta_app_secret = "meta-server-secret-for-test"
         verify_token = "meta-global-verify-token-for-test"
