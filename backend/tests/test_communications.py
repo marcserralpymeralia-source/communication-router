@@ -16,7 +16,7 @@ from app.master.database import MasterBase
 from app.communications.service import create_or_update_communication_from_email, get_communication, recipient_values
 from app.communications.routes import communication_detail, communications_list
 from app.master.service import TenantRole, TenantUser
-from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails
+from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_received_at
 
 
 class FakeImapClient:
@@ -45,6 +45,17 @@ class FakeImapClient:
 
 
 class CommunicationFoundationTests(unittest.TestCase):
+
+    def test_imap_date_is_normalized_for_kibak_communications(self):
+        from email.message import EmailMessage
+
+        message = EmailMessage()
+        message["Date"] = "Mon, 14 Sep 2026 09:30:00 +0200"
+
+        self.assertEqual(
+            _message_received_at(message),
+            datetime(2026, 9, 14, 7, 30, tzinfo=timezone.utc),
+        )
     def setUp(self):
         self.tenant_engine = create_engine("sqlite:///:memory:")
         self.master_engine = create_engine("sqlite:///:memory:")

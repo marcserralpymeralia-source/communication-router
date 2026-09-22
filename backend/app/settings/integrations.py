@@ -13,7 +13,7 @@ from email import policy
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import EmailMessage
-from email.utils import getaddresses, parseaddr
+from email.utils import getaddresses, parsedate_to_datetime, parseaddr
 from io import BytesIO
 from pathlib import Path
 
@@ -335,6 +335,19 @@ def _imap_uid_search(client, *criteria: str) -> list[bytes] | None:  # noqa: ANN
     if status != "OK" or not data:
         return None
     return (data[0] or b"").split()
+
+
+def _message_received_at(msg: EmailMessage) -> datetime | None:
+    raw_date = msg.get("Date")
+    if not raw_date:
+        return None
+    try:
+        received_at = parsedate_to_datetime(raw_date)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if received_at.tzinfo is None:
+        received_at = received_at.replace(tzinfo=timezone.utc)
+    return received_at.astimezone(timezone.utc)
 
 
 def test_imap_connection(settings: EmailSettings, *, request_id: str | None = None) -> dict:
@@ -891,6 +904,7 @@ def _fetch_imap_emails(
                                 discarded += 1
                                 continue
                     msg = message_from_bytes(raw, policy=policy.default)
+                    message_received_at = _message_received_at(msg)
                     message_id = msg.get("Message-ID") or None
                     dedupe_external_id = _normalized_email_external_id(mailbox, uidvalidity, uid, mailbox_id)
                     if kibak_runtime:
@@ -915,6 +929,8 @@ def _fetch_imap_emails(
                         )
                     if exists:
                         duplicates += 1
+                        if kibak_runtime and not exists.received_at and message_received_at:
+                            exists.received_at = message_received_at
                         processed_since_checkpoint += 1
                         last_processed_uid = uid
                         if sync_state:
@@ -944,6 +960,7 @@ def _fetch_imap_emails(
                             subject=subject,
                             body_text=body,
                             body_html=body_html,
+                            received_at=message_received_at,
                             metadata={
                                 "message_id": message_id,
                                 "imap_mailbox": mailbox,
