@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 from urllib.parse import urlencode
 
@@ -61,6 +61,12 @@ EDIT_FIELDS = [
 SECRET_FIELDS = {"imap_password_encrypted", "smtp_password_encrypted"}
 BOOL_FIELDS = {"imap_use_ssl", "auto_sync_enabled", "auto_process_on_fetch", "read_unread_only", "smtp_enabled"}
 BACKFILL_PRODUCTION_CONFIRM = "BACKFILL_PRODUCTION_CONFIRM"
+
+
+def _default_backfill_window() -> tuple[str, str]:
+    """Return a bounded seven-day window for UI-launched backfills."""
+    today = datetime.now(timezone.utc).date()
+    return (today - timedelta(days=7)).isoformat(), today.isoformat()
 
 
 def _safe_database_name(database_url: str | None) -> str | None:
@@ -203,6 +209,8 @@ def mailboxes_page(
             "can_test": _can_test(user),
             "message": request.query_params.get("mailbox_message"),
             "error": request.query_params.get("mailbox_error"),
+            "backfill_from_date": _default_backfill_window()[0],
+            "backfill_to_date": _default_backfill_window()[1],
             "pilot_sync_result": {
                 "imported": request.query_params.get("pilot_imported"),
                 "duplicates": request.query_params.get("pilot_duplicates"),
@@ -657,11 +665,13 @@ async def backfill_mailbox(
     if not mailbox:
         return _response(request, {"ok": False, "message": "No se encontró el buzón solicitado."}, status_code=404)
     data = await _form_data(request)
+    default_from_date, default_to_date = _default_backfill_window()
     payload = {
         "mailbox_id": mailbox.id,
-        "from_date": data.get("from_date") or mailbox.read_from_date,
-        "to_date": data.get("to_date") or None,
+        "from_date": data.get("from_date") or mailbox.read_from_date or default_from_date,
+        "to_date": data.get("to_date") or default_to_date,
         "limit": None,
+        "batch_size": 1,
         "unbounded": True,
     }
     job = enqueue_job(db, company_id=user.company_id, job_type="backfill_imap", payload=payload, created_by_user_id=user.id)

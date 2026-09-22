@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from fastapi import UploadFile
@@ -182,6 +183,7 @@ class JobsReliabilityTests(unittest.TestCase):
                     "from_date": "2026-08-20",
                     "to_date": None,
                     "limit": 7,
+                    "batch_size": 1,
                 },
                 created_by_user_id=None,
             )
@@ -197,24 +199,24 @@ class JobsReliabilityTests(unittest.TestCase):
                     "duplicates": 0,
                     "has_more": True,
                     "last_uid": "10",
-                    "batch_count": 5,
+                    "batch_count": 1,
                     "found": 7,
-                    "message": "5 correos procesados",
+                    "message": "1 correo procesado",
                 },
             ) as backfill:
                 result = _process_job(db, job)
 
             self.assertTrue(result["ok"])
-            self.assertEqual(result["remaining"], 2)
-            self.assertEqual(result["remaining_messages"], 2)
-            self.assertEqual(result["remaining_limit"], 2)
+            self.assertEqual(result["remaining"], 6)
+            self.assertEqual(result["remaining_messages"], 6)
+            self.assertEqual(result["remaining_limit"], 6)
             self.assertEqual(result["total_found"], 7)
-            self.assertEqual(result["batch_count"], 5)
+            self.assertEqual(result["batch_count"], 1)
             self.assertIn("continuation_job_id", result)
 
             backfill.assert_called_once()
             kwargs = backfill.call_args.kwargs
-            self.assertEqual(kwargs["batch_size"], 5)
+            self.assertEqual(kwargs["batch_size"], 1)
             self.assertTrue(kwargs["stop_after_batch"])
 
             jobs = db.scalars(
@@ -234,15 +236,66 @@ class JobsReliabilityTests(unittest.TestCase):
                 fromlist=["job_payload"],
             ).job_payload(continuation)
 
-            self.assertEqual(continuation_payload["limit"], 2)
+            self.assertEqual(continuation_payload["limit"], 6)
             self.assertTrue(continuation_payload["resume"])
             self.assertEqual(continuation_payload["total_found"], 7)
-            self.assertEqual(continuation_payload["processed_count"], 5)
+            self.assertEqual(continuation_payload["processed_count"], 1)
+            self.assertEqual(continuation_payload["batch_size"], 1)
             self.assertEqual(
                 continuation_payload["from_date"],
                 "2026-08-20",
             )
             self.assertNotIn("from_uid", continuation_payload)
+        finally:
+            db.close()
+
+    def test_pilot_backfill_fills_missing_window_for_legacy_job(self):
+        self._seed_master()
+
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=True,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            db.add(EmailSettings(company_id=1, auto_sync_enabled=True))
+            db.commit()
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="backfill_imap",
+                payload={"unbounded": True},
+                created_by_user_id=None,
+            )
+
+            with patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession), patch(
+                "app.workers.jobs_worker.get_settings",
+                return_value=SimpleNamespace(is_pilot_runtime=True),
+            ), patch(
+                "app.workers.jobs_worker._pilot_backfill_window",
+                return_value=("2026-09-15", "2026-09-22"),
+            ), patch(
+                "app.workers.jobs_worker.backfill_imap_emails",
+                return_value={"ok": True, "has_more": False, "batch_count": 0, "found": 0},
+            ) as backfill:
+                result = _process_job(db, job)
+
+            self.assertTrue(result["ok"])
+            args, kwargs = backfill.call_args
+            self.assertEqual(args[3], "2026-09-15")
+            self.assertEqual(args[4], "2026-09-22")
+            self.assertEqual(kwargs["batch_size"], 1)
         finally:
             db.close()
 
@@ -282,6 +335,7 @@ class JobsReliabilityTests(unittest.TestCase):
                     "from_date": "2026-08-20",
                     "to_date": None,
                     "limit": 7,
+                    "batch_size": 1,
                     "total_found": 12,
                     "processed_count": 5,
                     "resume": True,
@@ -297,24 +351,24 @@ class JobsReliabilityTests(unittest.TestCase):
                 return_value={
                     "ok": True,
                     "found": 7,
-                    "batch_count": 5,
+                    "batch_count": 1,
                     "has_more": True,
-                    "message": "5 correos procesados",
+                    "message": "1 correo procesado",
                 },
             ) as backfill:
                 result = _process_job(db, job)
 
             self.assertTrue(result["ok"])
-            self.assertEqual(result["remaining_messages"], 2)
-            self.assertEqual(result["remaining_limit"], 2)
+            self.assertEqual(result["remaining_messages"], 6)
+            self.assertEqual(result["remaining_limit"], 6)
             self.assertEqual(result["total_found"], 12)
-            self.assertEqual(result["batch_count"], 5)
-            self.assertEqual(result["remaining"], 2)
+            self.assertEqual(result["batch_count"], 1)
+            self.assertEqual(result["remaining"], 6)
             self.assertIn("continuation_job_id", result)
 
             backfill.assert_called_once()
             kwargs = backfill.call_args.kwargs
-            self.assertEqual(kwargs["batch_size"], 5)
+            self.assertEqual(kwargs["batch_size"], 1)
             self.assertTrue(kwargs["stop_after_batch"])
             self.assertTrue(kwargs["resume"])
 
@@ -333,9 +387,10 @@ class JobsReliabilityTests(unittest.TestCase):
                 fromlist=["job_payload"],
             ).job_payload(jobs[1])
 
-            self.assertEqual(continuation_payload["limit"], 2)
+            self.assertEqual(continuation_payload["limit"], 6)
             self.assertEqual(continuation_payload["total_found"], 12)
-            self.assertEqual(continuation_payload["processed_count"], 10)
+            self.assertEqual(continuation_payload["processed_count"], 6)
+            self.assertEqual(continuation_payload["batch_size"], 1)
             self.assertTrue(continuation_payload["resume"])
         finally:
             db.close()

@@ -6,7 +6,7 @@ import os
 import threading
 import signal
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.error import URLError
 
 import json
@@ -75,6 +75,11 @@ JOB_TYPES = {
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _pilot_backfill_window() -> tuple[str, str]:
+    today = datetime.now(timezone.utc).date()
+    return (today - timedelta(days=7)).isoformat(), today.isoformat()
 
 
 def touch_worker_heartbeat(db, company_id: int, *, status: str = "active", error: Exception | None = None) -> WorkerHeartbeat:
@@ -253,17 +258,26 @@ def _process_job(db, job: BackgroundJob) -> dict:
             )
             unbounded = bool(payload.get("unbounded", False))
             requested_limit = None if unbounded else max(int(payload.get("limit") or 1), 1)
+            pilot_runtime = get_settings().is_pilot_runtime
+            from_date = payload.get("from_date")
+            to_date = payload.get("to_date")
+            if pilot_runtime and (not from_date or not to_date):
+                default_from_date, default_to_date = _pilot_backfill_window()
+                from_date = from_date or default_from_date
+                to_date = to_date or default_to_date
+            default_batch_size = 1 if pilot_runtime else 5
+            batch_size = max(min(int(payload.get("batch_size") or default_batch_size), 5), 1)
 
             result = backfill_imap_emails(
                 db,
                 settings,
                 job.company_id,
-                payload.get("from_date"),
-                payload.get("to_date"),
+                from_date,
+                to_date,
                 limit=requested_limit,
                 from_uid=payload.get("from_uid"),
                 to_uid=payload.get("to_uid"),
-                batch_size=5,
+                batch_size=batch_size,
                 resume=bool(payload.get("resume", False)),
                 stop_after_batch=True,
                 sync_state=sync_state,
@@ -286,13 +300,14 @@ def _process_job(db, job: BackgroundJob) -> dict:
 
             if result.get("ok") and result.get("has_more") and (unbounded or remaining_limit > 0) and remaining_messages > 0:
                 continuation_payload = {
-                    "from_date": payload.get("from_date"),
-                    "to_date": payload.get("to_date"),
+                    "from_date": from_date,
+                    "to_date": to_date,
                     "limit": remaining_limit,
                     "unbounded": unbounded,
                     "resume": True,
                     "total_found": total_found,
                     "processed_count": processed_count,
+                    "batch_size": batch_size,
                 }
                 if payload.get("mailbox_id") is not None:
                     continuation_payload["mailbox_id"] = payload["mailbox_id"]

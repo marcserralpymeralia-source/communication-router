@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from datetime import date, timedelta
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
@@ -13,7 +14,7 @@ from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.database import Base
 from app.db.models import AuditLog, Company, EmailSettings, Mailbox
 from app.mailboxes.service import get_mailbox, get_or_create_mailbox_sync_state
-from app.mailboxes.routes import create_mailbox, test_mailbox, test_mailbox_smtp, update_mailbox
+from app.mailboxes.routes import _default_backfill_window, create_mailbox, test_mailbox, test_mailbox_smtp, update_mailbox
 from app.master.database import MasterBase
 from app.master.models import MailboxSyncState, MasterCompany
 from app.master.service import TenantRole, TenantUser
@@ -49,6 +50,10 @@ class MailboxFoundationTests(unittest.TestCase):
         self.tenant_engine.dispose()
         self.master_engine.dispose()
         SYNC_LOCKS.clear()
+
+    def test_backfill_default_window_is_bounded_to_seven_days(self):
+        from_date, to_date = _default_backfill_window()
+        self.assertEqual(date.fromisoformat(to_date) - date.fromisoformat(from_date), timedelta(days=7))
 
     def test_tenant_can_have_two_mailboxes_with_independent_sync_states(self):
         with self.tenant_session() as db, self.master_session() as master_db:
