@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
@@ -21,8 +22,9 @@ from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_r
 
 
 class FakeImapClient:
-    def __init__(self, raw_message: bytes) -> None:
+    def __init__(self, raw_message: bytes, internal_date: str | None = None) -> None:
         self.raw_message = raw_message
+        self.internal_date = internal_date
 
     def login(self, _username, _password):  # noqa: ANN001
         return "OK", [b"logged in"]
@@ -37,7 +39,8 @@ class FakeImapClient:
         if command == "search":
             return "OK", [b"140"]
         if command == "fetch":
-            meta = b"140 (UID 140 RFC822 {999})"
+            internal_date = f' INTERNALDATE "{self.internal_date}"' if self.internal_date else ""
+            meta = f"140 (UID 140{internal_date} RFC822 {{999}})".encode()
             return "OK", [(meta, self.raw_message)]
         return "OK", [b""]
 
@@ -67,6 +70,76 @@ class CommunicationFoundationTests(unittest.TestCase):
 
         self.assertEqual(
             _message_received_at(message, fetch_meta),
+            datetime(2026, 9, 14, 7, 30, tzinfo=timezone.utc),
+        )
+
+    def test_kibak_duplicate_repair_fills_received_at_without_creating_communication(self):
+        raw_message = (
+            b"From: sender@example.com\r\n"
+            b"To: inbox@example.com\r\n"
+            b"Subject: Historical message\r\n"
+            b"Message-ID: <historical-repair@example.com>\r\n"
+            b"\r\n"
+            b"Body"
+        )
+        with self.tenant_session() as db:
+            db.add(Company(id=1, name="Tenant A"))
+            mailbox = Mailbox(
+                id=1,
+                company_id=1,
+                name="Inbox",
+                email_address="inbox@example.com",
+                provider="microsoft365",
+                imap_host="outlook.office365.com",
+                imap_username="inbox@example.com",
+                imap_password_encrypted=encrypt_secret("password"),
+                read_unread_only=False,
+            )
+            db.add(mailbox)
+            db.flush()
+            existing = Communication(
+                company_id=1,
+                mailbox_id=mailbox.id,
+                provider="microsoft365",
+                external_message_id="<historical-repair@example.com>",
+                subject="Historical message",
+                body_text="Body",
+                received_at=None,
+                processing_status="received",
+                routing_status="unclassified",
+            )
+            db.add(existing)
+            db.commit()
+            mailbox_id = mailbox.id
+
+            with patch(
+                "app.settings.integrations._imap_client",
+                return_value=FakeImapClient(raw_message, "14-Sep-2026 09:30:00 +0200"),
+            ), patch(
+                "app.settings.integrations.get_settings",
+                return_value=SimpleNamespace(app_slug="kibak", is_pilot_runtime=False),
+            ):
+                original_dialect_name = self.tenant_engine.dialect.name
+                self.tenant_engine.dialect.name = "postgresql"
+                try:
+                    result = _fetch_imap_emails(
+                        db,
+                        mailbox,
+                        1,
+                        unread_only=False,
+                        mailbox_id=mailbox_id,
+                    )
+                finally:
+                    self.tenant_engine.dialect.name = original_dialect_name
+
+            db.commit()
+            communications = db.scalars(select(Communication)).all()
+
+        self.assertEqual(result["saved"], 0)
+        self.assertEqual(result["duplicates"], 1)
+        self.assertEqual(len(communications), 1)
+        self.assertEqual(
+            communications[0].received_at.replace(tzinfo=timezone.utc),
             datetime(2026, 9, 14, 7, 30, tzinfo=timezone.utc),
         )
 
