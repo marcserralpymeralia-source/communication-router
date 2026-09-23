@@ -49,6 +49,20 @@ IMAP_MAX_ATTACHMENT_SIZE_MB = 10
 IMAP_TIMEOUT_SECONDS = 20
 SYNC_LOCKS: dict[tuple[int, int | None], threading.Lock] = {}
 INITIAL_HISTORY_MODES = {"new", "7d", "30d", "100", "custom"}
+KIBAK_INTERNAL_SENDER_DOMAINS = {"ingesco.com"}
+
+
+def is_kibak_internal_sender(sender_email: str | None) -> bool:
+    """Return whether a KIBAK message is an internal forwarded copy."""
+    normalized = (sender_email or "").strip().lower().rstrip(".")
+    return "@" in normalized and normalized.rsplit("@", 1)[1] in KIBAK_INTERNAL_SENDER_DOMAINS
+
+
+def effective_unread_only(*, configured: bool | None, app_slug: str, mailbox_id: int | None) -> bool | None:
+    """Use UID checkpoints for KIBAK mailbox polling, regardless of Seen flags."""
+    if app_slug.strip().lower() == "kibak" and mailbox_id is not None:
+        return False
+    return configured
 
 
 def _imap_test_context(settings: EmailSettings, request_id: str | None = None) -> dict:
@@ -951,6 +965,23 @@ def _fetch_imap_emails(
                         continue
                     subject = _decode_mime_header(msg.get("Subject", ""))
                     sender = _decode_mime_header(msg.get("From", ""))
+                    if kibak_runtime:
+                        _sender_name, sender_email = parseaddr(sender)
+                        if is_kibak_internal_sender(sender_email):
+                            discarded += 1
+                            processed_since_checkpoint += 1
+                            last_processed_uid = uid
+                            if sync_state:
+                                sync_state.backfill_last_uid = uid
+                            log_action(
+                                db,
+                                company_id=company_id,
+                                user=None,
+                                action="email.internal_sender_ignored",
+                                entity_type="communication",
+                                message="Remitente interno KIBAK omitido.",
+                            )
+                            continue
                     # Keep the legacy extraction hook in the IMAP path while
                     # retaining the original HTML for Communications.
                     body = _extract_body(msg)

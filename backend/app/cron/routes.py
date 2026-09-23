@@ -14,7 +14,7 @@ from app.db.models import EmailSettings, Mailbox
 from app.master.database import get_master_db
 from app.master.models import EmailSyncState, MailboxSyncState, MasterTenantDatabase
 from app.mailboxes.service import sync_state_from_mailbox
-from app.settings.integrations import read_latest_imap_emails
+from app.settings.integrations import effective_unread_only, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import tenant_db_session
 from app.workers.email_worker import _acquire_lock, _release_lock  # noqa: PLC2701
@@ -191,7 +191,13 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
                 mailbox,
                 tenant.company_id,
                 auto_process=mailbox.auto_process_on_fetch,
-                unread_only=mailbox.read_unread_only,
+                # KIBAK uses the UID cursor for new-mail detection. Do not
+                # lose a new message just because a mail client read it first.
+                unread_only=effective_unread_only(
+                    configured=mailbox.read_unread_only,
+                    app_slug=get_settings().app_slug,
+                    mailbox_id=mailbox.id,
+                ),
                 limit=max(min(int(mailbox.read_limit or 10), 50), 1),
                 sync_state=state,
                 sync_session=master_db,

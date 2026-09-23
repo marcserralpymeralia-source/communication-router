@@ -17,7 +17,7 @@ from app.db.models import EmailSettings, Mailbox
 from app.master.models import EmailSyncState, MailboxSyncState, MasterTenantDatabase
 from app.channels.service import is_channel_enabled
 from app.mailboxes.service import get_or_create_mailbox_sync_state
-from app.settings.integrations import read_latest_imap_emails
+from app.settings.integrations import effective_unread_only, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import tenant_db_session
 
@@ -120,7 +120,12 @@ def reconcile_mailbox_email(
             mailbox,
             tenant.company_id,
             auto_process=mailbox.auto_process_on_fetch,
-            unread_only=mailbox.read_unread_only,
+            # KIBAK tracks new mail by UID, independently of Seen flags.
+            unread_only=effective_unread_only(
+                configured=mailbox.read_unread_only,
+                app_slug=get_settings().app_slug,
+                mailbox_id=mailbox.id,
+            ),
             limit=mailbox.read_limit,
             sync_state=state,
             sync_session=master_db,

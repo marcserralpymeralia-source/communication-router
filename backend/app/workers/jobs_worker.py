@@ -36,7 +36,7 @@ from app.orders.service import _customer_label, _sync_customer_product_knowledge
 from app.routing.auto import AUTO_ROUTING_JOB_TYPE, process_automatic_routing
 from app.routing.forwarding import AUTO_FORWARD_JOB_TYPE, process_forwarding_job
 from app.semantic_retrieval.products import index_products
-from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
+from app.settings.integrations import backfill_imap_emails, effective_unread_only, read_latest_imap_emails
 from app.mailboxes.service import get_or_create_mailbox_sync_state
 from app.settings.service import get_or_create_settings
 from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
@@ -209,7 +209,11 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 settings,
                 job.company_id,
                 auto_process=bool(payload.get("auto_process", False)),
-                unread_only=payload.get("unread_only"),
+                unread_only=effective_unread_only(
+                    configured=payload.get("unread_only"),
+                    app_slug=get_settings().app_slug,
+                    mailbox_id=mailbox_id,
+                ),
                 limit=payload.get("limit"),
                 sync_state=sync_state,
                 sync_session=master_db,

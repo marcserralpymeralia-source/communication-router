@@ -18,7 +18,7 @@ from app.master.models import MailboxSyncState
 from app.communications.service import create_or_update_communication_from_email, get_communication, recipient_values
 from app.communications.routes import communication_detail, communications_list
 from app.master.service import TenantRole, TenantUser
-from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_received_at, _sync_state_matches_scope, _update_sync_checkpoint
+from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_received_at, _sync_state_matches_scope, _update_sync_checkpoint, effective_unread_only, is_kibak_internal_sender
 
 
 class FakeImapClient:
@@ -49,6 +49,17 @@ class FakeImapClient:
 
 
 class CommunicationFoundationTests(unittest.TestCase):
+
+    def test_kibak_internal_sender_domain_is_excluded_without_matching_other_domains(self):
+        self.assertTrue(is_kibak_internal_sender("relay@ingesco.com"))
+        self.assertTrue(is_kibak_internal_sender("RELAY@INGESCO.COM"))
+        self.assertFalse(is_kibak_internal_sender("relay@quibac.com"))
+        self.assertFalse(is_kibak_internal_sender("relay@ingesco.test"))
+
+    def test_kibak_mailbox_polling_does_not_depend_on_seen_flag(self):
+        self.assertFalse(effective_unread_only(configured=True, app_slug="kibak", mailbox_id=1))
+        self.assertEqual(effective_unread_only(configured=True, app_slug="anchi", mailbox_id=1), True)
+        self.assertIsNone(effective_unread_only(configured=None, app_slug="kibak", mailbox_id=None))
 
     def test_imap_date_is_normalized_for_kibak_communications(self):
         from email.message import EmailMessage
@@ -142,6 +153,63 @@ class CommunicationFoundationTests(unittest.TestCase):
             communications[0].received_at.replace(tzinfo=timezone.utc),
             datetime(2026, 9, 14, 7, 30, tzinfo=timezone.utc),
         )
+
+    def test_kibak_internal_sender_is_discarded_and_cursor_advances(self):
+        raw_message = (
+            b"From: relay@ingesco.com\r\n"
+            b"To: inbox@example.com\r\n"
+            b"Subject: Internal forward\r\n"
+            b"Message-ID: <internal-forward@example.com>\r\n"
+            b"Date: Wed, 23 Sep 2026 10:00:00 +0000\r\n"
+            b"\r\n"
+            b"Forwarded message"
+        )
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="Tenant A"))
+            mailbox = Mailbox(
+                id=1,
+                company_id=1,
+                name="Inbox",
+                email_address="inbox@example.com",
+                provider="microsoft365",
+                imap_host="outlook.office365.com",
+                imap_username="inbox@example.com",
+                imap_password_encrypted=encrypt_secret("password"),
+                read_unread_only=True,
+            )
+            db.add(mailbox)
+            db.flush()
+            state = MailboxSyncState(company_id=1, mailbox_id=mailbox.id, last_seen_uid="139")
+            master_db.add(state)
+            master_db.commit()
+
+            with patch(
+                "app.settings.integrations._imap_client",
+                return_value=FakeImapClient(raw_message, "23-Sep-2026 10:00:00 +0000"),
+            ), patch(
+                "app.settings.integrations.get_settings",
+                return_value=SimpleNamespace(app_slug="kibak", is_pilot_runtime=False),
+            ):
+                original_dialect_name = self.tenant_engine.dialect.name
+                self.tenant_engine.dialect.name = "postgresql"
+                try:
+                    result = _fetch_imap_emails(
+                        db,
+                        mailbox,
+                        1,
+                        unread_only=False,
+                        sync_state=state,
+                        sync_session=master_db,
+                        mailbox_id=mailbox.id,
+                    )
+                finally:
+                    self.tenant_engine.dialect.name = original_dialect_name
+
+            db.commit()
+            self.assertEqual(result["saved"], 0)
+            self.assertEqual(result["discarded"], 1)
+            self.assertEqual(db.scalars(select(Communication)).all(), [])
+            self.assertEqual(state.last_seen_uid, "140")
 
     def test_mailbox_sync_state_uses_mailbox_id_without_legacy_mailbox_field(self):
         with self.master_session() as db:
