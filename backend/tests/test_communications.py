@@ -15,7 +15,7 @@ from app.db.models import Communication, CommunicationAttachment, Company, Email
 from app.mailboxes.service import get_or_create_mailbox_sync_state
 from app.master.database import MasterBase
 from app.master.models import MailboxSyncState
-from app.communications.service import create_or_update_communication_from_email, get_communication, recipient_values
+from app.communications.service import create_or_update_communication_from_email, get_communication, list_communications, recipient_values
 from app.communications.routes import communication_detail, communications_list
 from app.master.service import TenantRole, TenantUser
 from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_received_at, _sync_state_matches_scope, _update_sync_checkpoint, effective_unread_only, is_kibak_internal_sender
@@ -447,6 +447,34 @@ class CommunicationFoundationTests(unittest.TestCase):
 
             self.assertEqual([item["id"] for item in json.loads(listing.body)["items"]], [first.id])
             self.assertEqual(detail.status_code, 404)
+
+    def test_communications_list_prioritizes_received_messages_over_undated_rows(self):
+        with self.tenant_session() as db:
+            db.add(Company(id=1, name="Tenant A"))
+            db.add(Mailbox(id=1, company_id=1, name="A", email_address="a@example.com"))
+            db.flush()
+            undated = create_or_update_communication_from_email(
+                db,
+                company_id=1,
+                mailbox_id=1,
+                provider="microsoft365",
+                external_message_id="undated",
+                subject="Historical import",
+            )
+            dated = create_or_update_communication_from_email(
+                db,
+                company_id=1,
+                mailbox_id=1,
+                provider="microsoft365",
+                external_message_id="dated",
+                subject="New message",
+                received_at=datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc),
+            )
+            db.commit()
+
+            rows = list_communications(db, 1, limit=10)
+
+        self.assertEqual([row.id for row in rows], [dated.id, undated.id])
 
 
 if __name__ == "__main__":

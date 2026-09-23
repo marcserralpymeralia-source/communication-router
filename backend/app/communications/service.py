@@ -209,7 +209,7 @@ def list_communications(
             )
         )
         .options(selectinload(Communication.attachments))
-        .order_by(Communication.received_at.desc(), Communication.id.desc())
+        .order_by(Communication.received_at.desc().nullslast(), Communication.id.desc())
         .limit(safe_limit)
         .offset(safe_offset)
     ).all()
