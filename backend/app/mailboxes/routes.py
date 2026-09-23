@@ -181,6 +181,7 @@ def mailboxes_page(
     master_db: Session = Depends(get_master_db),
     user: TenantUser = Depends(current_user),
 ):
+    settings = get_settings()
     mailboxes = list_mailboxes(db, user.company_id)
     states = {
         state.mailbox_id: state
@@ -207,6 +208,11 @@ def mailboxes_page(
             "mailbox_states": states,
             "can_edit": _can_edit(user),
             "can_test": _can_test(user),
+            "backfill_admin_available": (
+                settings.environment == "production"
+                and settings.app_slug.strip().lower() == "kibak"
+                and settings.enable_production_backfill_admin
+            ),
             "message": request.query_params.get("mailbox_message"),
             "error": request.query_params.get("mailbox_error"),
             "backfill_from_date": _default_backfill_window()[0],

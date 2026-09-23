@@ -14,7 +14,7 @@ from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.database import Base
 from app.db.models import AuditLog, Company, EmailSettings, Mailbox
 from app.mailboxes.service import get_mailbox, get_or_create_mailbox_sync_state
-from app.mailboxes.routes import _default_backfill_window, create_mailbox, test_mailbox, test_mailbox_smtp, update_mailbox
+from app.mailboxes.routes import _default_backfill_window, create_mailbox, mailboxes_page, test_mailbox, test_mailbox_smtp, update_mailbox
 from app.master.database import MasterBase
 from app.master.models import MailboxSyncState, MasterCompany
 from app.master.service import TenantRole, TenantUser
@@ -54,6 +54,57 @@ class MailboxFoundationTests(unittest.TestCase):
     def test_backfill_default_window_is_bounded_to_seven_days(self):
         from_date, to_date = _default_backfill_window()
         self.assertEqual(date.fromisoformat(to_date) - date.fromisoformat(from_date), timedelta(days=7))
+
+    def test_production_backfill_control_is_exposed_only_when_flagged(self):
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="KIBAK Pilot"))
+            db.add(
+                Mailbox(
+                    id=1,
+                    company_id=1,
+                    name="Microsoft piloto",
+                    email_address="pilot@example.com",
+                    provider="microsoft365",
+                    connection_method="oauth2",
+                    refresh_token_encrypted="ciphertext",
+                    enabled=False,
+                    auto_sync_enabled=False,
+                )
+            )
+            db.commit()
+            user = TenantUser(
+                id=1,
+                email="admin@example.com",
+                name="Admin",
+                is_active=True,
+                company_id=1,
+                company_name="KIBAK Pilot",
+                company_slug="kibak-pilot",
+                role=TenantRole("Administrador"),
+                membership_id=1,
+            )
+            request = SimpleNamespace(headers={"accept": "text/html"}, query_params={})
+            enabled = SimpleNamespace(
+                environment="production",
+                app_slug="kibak",
+                enable_production_backfill_admin=True,
+            )
+            disabled = SimpleNamespace(
+                environment="production",
+                app_slug="kibak",
+                enable_production_backfill_admin=False,
+            )
+            with patch("app.mailboxes.routes.get_settings", return_value=enabled), patch(
+                "app.mailboxes.routes.templates.TemplateResponse", return_value=object()
+            ) as render:
+                mailboxes_page(request, db, master_db, user)
+                self.assertTrue(render.call_args.args[1]["backfill_admin_available"])
+
+            with patch("app.mailboxes.routes.get_settings", return_value=disabled), patch(
+                "app.mailboxes.routes.templates.TemplateResponse", return_value=object()
+            ) as render:
+                mailboxes_page(request, db, master_db, user)
+                self.assertFalse(render.call_args.args[1]["backfill_admin_available"])
 
     def test_tenant_can_have_two_mailboxes_with_independent_sync_states(self):
         with self.tenant_session() as db, self.master_session() as master_db:

@@ -75,6 +75,13 @@
                   </label>
                   <button class="secondary compact-button" data-loading-text="Encolando...">Backfill acotado</button>
                 </form>
+                {% if backfill_admin_available and can_edit and microsoft_oauth and oauth_connected %}
+                  <form method="post" action="/settings/mailboxes/{{ mailbox.id }}/backfill-once">
+                    <input type="hidden" name="confirmation" value="BACKFILL_PRODUCTION_CONFIRM">
+                    <button class="secondary compact-button" data-loading-text="Importando histórico...">Backfill Production · desde 14/09/2026</button>
+                  </form>
+                  <p class="muted settings-status-note">Ejecución única administrativa. Mantiene el buzón y el reenvío sin cambios y no ejecuta IA.</p>
+                {% endif %}
               {% endif %}
               {% if can_edit and google_oauth and not google_connected %}
                 <a class="button secondary compact-button" href="/settings/mailboxes/{{ mailbox.id }}/oauth/google/start">Conectar con Google</a>
