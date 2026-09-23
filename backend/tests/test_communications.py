@@ -58,6 +58,18 @@ class CommunicationFoundationTests(unittest.TestCase):
             datetime(2026, 9, 14, 7, 30, tzinfo=timezone.utc),
         )
 
+    def test_imap_internaldate_fills_missing_message_date(self):
+        from email.message import EmailMessage
+
+        message = EmailMessage()
+        message["Subject"] = "Sin cabecera Date"
+        fetch_meta = '140 (UID 140 INTERNALDATE "14-Sep-2026 09:30:00 +0200" RFC822)'
+
+        self.assertEqual(
+            _message_received_at(message, fetch_meta),
+            datetime(2026, 9, 14, 7, 30, tzinfo=timezone.utc),
+        )
+
     def test_mailbox_sync_state_uses_mailbox_id_without_legacy_mailbox_field(self):
         with self.master_session() as db:
             state = MailboxSyncState(company_id=1, mailbox_id=1, last_seen_uid="41")

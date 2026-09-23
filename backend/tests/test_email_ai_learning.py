@@ -42,12 +42,14 @@ class FakeImapClient:
         login_exc: Exception | None = None,
         select_status: str = "OK",
         select_payload: bytes = b"2",
+        internal_dates: dict[str, str] | None = None,
     ) -> None:
         self.messages = messages or {}
         self.search_result = search_result
         self.login_exc = login_exc
         self.select_status = select_status
         self.select_payload = select_payload
+        self.internal_dates = internal_dates or {}
         self.search_calls: list[tuple] = []
         self.select_calls: list[tuple] = []
         self.uid_calls: list[tuple] = []
@@ -114,7 +116,9 @@ class FakeImapClient:
         if command == "fetch":
             uid = _args[0].decode() if isinstance(_args[0], bytes) else str(_args[0])
             raw = self.messages[uid]
-            meta = f"{uid} (UID {uid} RFC822 {{123}})".encode()
+            internal_date = self.internal_dates.get(uid)
+            internal_part = f' INTERNALDATE "{internal_date}"' if internal_date else ""
+            meta = f"{uid} (UID {uid}{internal_part} RFC822 {{123}})".encode()
             return "OK", [(meta, raw)]
         if command == "store":
             return "OK", [b"stored"]
@@ -123,7 +127,9 @@ class FakeImapClient:
     def fetch(self, msg_id, *_args, **_kwargs):
         uid = msg_id.decode()
         raw = self.messages[uid]
-        meta = f"{uid} (UID {uid} RFC822 {{123}})".encode()
+        internal_date = self.internal_dates.get(uid)
+        internal_part = f' INTERNALDATE "{internal_date}"' if internal_date else ""
+        meta = f"{uid} (UID {uid}{internal_part} RFC822 {{123}})".encode()
         return "OK", [(meta, raw)]
 
     def logout(self):

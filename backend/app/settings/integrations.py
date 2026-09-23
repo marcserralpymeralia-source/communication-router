@@ -337,17 +337,27 @@ def _imap_uid_search(client, *criteria: str) -> list[bytes] | None:  # noqa: ANN
     return (data[0] or b"").split()
 
 
-def _message_received_at(msg: EmailMessage) -> datetime | None:
+def _message_received_at(msg: EmailMessage, fetch_meta: str | None = None) -> datetime | None:
+    """Resolve the message time, falling back to IMAP INTERNALDATE."""
     raw_date = msg.get("Date")
-    if not raw_date:
+    if raw_date:
+        try:
+            received_at = parsedate_to_datetime(raw_date)
+            if received_at.tzinfo is None:
+                received_at = received_at.replace(tzinfo=timezone.utc)
+            return received_at.astimezone(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            pass
+    match = re.search(r'INTERNALDATE\s+"([^"]+)"', fetch_meta or "", re.IGNORECASE)
+    if not match:
         return None
     try:
-        received_at = parsedate_to_datetime(raw_date)
+        received_at = parsedate_to_datetime(match.group(1))
+        if received_at.tzinfo is None:
+            received_at = received_at.replace(tzinfo=timezone.utc)
+        return received_at.astimezone(timezone.utc)
     except (TypeError, ValueError, OverflowError):
         return None
-    if received_at.tzinfo is None:
-        received_at = received_at.replace(tzinfo=timezone.utc)
-    return received_at.astimezone(timezone.utc)
 
 
 def test_imap_connection(settings: EmailSettings, *, request_id: str | None = None) -> dict:
@@ -888,7 +898,7 @@ def _fetch_imap_emails(
             batch_count = len(batch)
             for msg_id in batch:
                 try:
-                    status, msg_data = client.uid("fetch", msg_id, "(UID RFC822)")
+                    status, msg_data = client.uid("fetch", msg_id, "(UID INTERNALDATE RFC822)")
                     if status != "OK" or not msg_data or not msg_data[0]:
                         errors += 1
                         continue
@@ -906,7 +916,7 @@ def _fetch_imap_emails(
                                 discarded += 1
                                 continue
                     msg = message_from_bytes(raw, policy=policy.default)
-                    message_received_at = _message_received_at(msg)
+                    message_received_at = _message_received_at(msg, fetch_meta)
                     message_id = msg.get("Message-ID") or None
                     dedupe_external_id = _normalized_email_external_id(mailbox, uidvalidity, uid, mailbox_id)
                     if kibak_runtime:
