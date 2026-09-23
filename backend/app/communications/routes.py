@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
 from app.communications.service import WORKBENCH_FILTERS, count_communications, get_communication, list_communications, recipient_values, serialize_communication
+from app.core.config import get_settings
 from app.core.templating import templates
 from app.core.pagination import normalize_page
 from app.db.models import Department, Mailbox, RoutingAction, RoutingCorrection, RoutingDecision, User
@@ -240,6 +241,7 @@ def communications_list(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    exclude_internal_senders = get_settings().app_slug.strip().lower() == "kibak"
     items = list_communications(
         db,
         user.company_id,
@@ -247,6 +249,7 @@ def communications_list(
         offset=offset,
         workbench_filter=status if status in WORKBENCH_FILTERS else "all",
         search=q,
+        exclude_internal_senders=exclude_internal_senders,
     )
     return JSONResponse(
         {
@@ -276,6 +279,7 @@ def communications_workbench(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    exclude_internal_senders = get_settings().app_slug.strip().lower() == "kibak"
     status_value = status if isinstance(status, str) else "all"
     search_value = q if isinstance(q, str) else ""
     selected_status = status_value if status_value in WORKBENCH_FILTERS else "all"
@@ -286,6 +290,7 @@ def communications_workbench(
         workbench_filter=selected_status,
         no_destination=no_destination,
         search=search_value,
+        exclude_internal_senders=exclude_internal_senders,
     )
     items = list_communications(
         db,
@@ -295,6 +300,7 @@ def communications_workbench(
         workbench_filter=selected_status,
         no_destination=no_destination,
         search=search_value,
+        exclude_internal_senders=exclude_internal_senders,
     )
     counts = {
         key: count_communications(
@@ -303,6 +309,7 @@ def communications_workbench(
             workbench_filter=key,
             no_destination=no_destination,
             search=search_value,
+            exclude_internal_senders=exclude_internal_senders,
         )
         for key, _label in WORKBENCH_FILTER_OPTIONS
         if key != "all"
@@ -313,6 +320,7 @@ def communications_workbench(
         workbench_filter="all",
         no_destination=no_destination,
         search=search_value,
+        exclude_internal_senders=exclude_internal_senders,
     )
     return templates.TemplateResponse(
         "communications/workbench.html",
@@ -350,7 +358,12 @@ def communications_workbench_detail(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    communication = get_communication(db, user.company_id, communication_id)
+    communication = get_communication(
+        db,
+        user.company_id,
+        communication_id,
+        exclude_internal_senders=get_settings().app_slug.strip().lower() == "kibak",
+    )
     if communication is None:
         return JSONResponse({"ok": False, "message": "Comunicación no encontrada."}, status_code=404)
     row = _workbench_rows(db, user.company_id, [communication])[0]

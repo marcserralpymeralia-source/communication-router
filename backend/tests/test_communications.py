@@ -15,7 +15,7 @@ from app.db.models import Communication, CommunicationAttachment, Company, Email
 from app.mailboxes.service import get_or_create_mailbox_sync_state
 from app.master.database import MasterBase
 from app.master.models import MailboxSyncState
-from app.communications.service import create_or_update_communication_from_email, get_communication, list_communications, recipient_values
+from app.communications.service import count_communications, create_or_update_communication_from_email, get_communication, list_communications, recipient_values
 from app.communications.routes import communication_detail, communications_list
 from app.master.service import TenantRole, TenantUser
 from app.settings.integrations import SYNC_LOCKS, _fetch_imap_emails, _message_received_at, _sync_state_matches_scope, _update_sync_checkpoint, effective_unread_only, is_kibak_internal_sender
@@ -475,6 +475,39 @@ class CommunicationFoundationTests(unittest.TestCase):
             rows = list_communications(db, 1, limit=10)
 
         self.assertEqual([row.id for row in rows], [dated.id, undated.id])
+
+    def test_kibak_communications_exclude_internal_ingesco_senders(self):
+        with self.tenant_session() as db:
+            db.add(Company(id=1, name="Tenant A"))
+            db.add(Mailbox(id=1, company_id=1, name="A", email_address="a@example.com"))
+            db.flush()
+            external = create_or_update_communication_from_email(
+                db,
+                company_id=1,
+                mailbox_id=1,
+                provider="microsoft365",
+                external_message_id="external",
+                sender_email="client@example.com",
+                subject="External",
+            )
+            internal = create_or_update_communication_from_email(
+                db,
+                company_id=1,
+                mailbox_id=1,
+                provider="microsoft365",
+                external_message_id="internal",
+                sender_email="central@ingesco.com",
+                subject="Internal copy",
+            )
+            db.commit()
+
+            rows = list_communications(db, 1, limit=10, exclude_internal_senders=True)
+            total = count_communications(db, 1, exclude_internal_senders=True)
+            hidden = get_communication(db, 1, internal.id, exclude_internal_senders=True)
+
+        self.assertEqual([row.id for row in rows], [external.id])
+        self.assertEqual(total, 1)
+        self.assertIsNone(hidden)
 
 
 if __name__ == "__main__":

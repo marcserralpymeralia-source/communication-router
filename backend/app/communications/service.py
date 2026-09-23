@@ -62,10 +62,19 @@ def recipient_values(value: str | None) -> list[str]:
     return _recipient_list(parsed if isinstance(parsed, list) else str(parsed))
 
 
-def get_communication(db: Session, company_id: int, communication_id: int) -> Communication | None:
+def get_communication(
+    db: Session,
+    company_id: int,
+    communication_id: int,
+    *,
+    exclude_internal_senders: bool = False,
+) -> Communication | None:
+    filters = [Communication.company_id == company_id, Communication.id == communication_id]
+    if exclude_internal_senders:
+        filters.append(or_(Communication.sender_email.is_(None), ~Communication.sender_email.ilike("%@ingesco.com")))
     return db.scalar(
         select(Communication)
-        .where(Communication.company_id == company_id, Communication.id == communication_id)
+        .where(*filters)
         .options(selectinload(Communication.attachments))
     )
 
@@ -77,8 +86,11 @@ def _communication_filters(
     workbench_filter: str | None = None,
     no_destination: bool = False,
     search: str | None = None,
+    exclude_internal_senders: bool = False,
 ) -> list:
     filters = [Communication.company_id == company_id]
+    if exclude_internal_senders:
+        filters.append(or_(Communication.sender_email.is_(None), ~Communication.sender_email.ilike("%@ingesco.com")))
     if routing_status and routing_status in ROUTING_STATUSES:
         filters.append(Communication.routing_status == routing_status)
     if isinstance(search, str) and (term := search.strip()):
@@ -194,6 +206,7 @@ def list_communications(
     workbench_filter: str | None = None,
     no_destination: bool = False,
     search: str | None = None,
+    exclude_internal_senders: bool = False,
 ) -> list[Communication]:
     safe_limit = max(min(int(limit or 50), 100), 1)
     safe_offset = max(int(offset or 0), 0)
@@ -206,6 +219,7 @@ def list_communications(
                 workbench_filter=workbench_filter,
                 no_destination=no_destination,
                 search=search,
+                exclude_internal_senders=exclude_internal_senders,
             )
         )
         .options(selectinload(Communication.attachments))
@@ -223,6 +237,7 @@ def count_communications(
     workbench_filter: str | None = None,
     no_destination: bool = False,
     search: str | None = None,
+    exclude_internal_senders: bool = False,
 ) -> int:
     return int(
         db.scalar(
@@ -233,6 +248,7 @@ def count_communications(
                     workbench_filter=workbench_filter,
                     no_destination=no_destination,
                     search=search,
+                    exclude_internal_senders=exclude_internal_senders,
                 )
             )
         )
