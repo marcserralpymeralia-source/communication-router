@@ -271,6 +271,7 @@ def communications_workbench(
     page: int = Query(1, ge=1),
     page_size: int = Query(25),
     status: str = Query("all"),
+    no_destination: bool = Query(False),
     q: str = Query("", max_length=120),
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
@@ -283,6 +284,7 @@ def communications_workbench(
         db,
         user.company_id,
         workbench_filter=selected_status,
+        no_destination=no_destination,
         search=search_value,
     )
     items = list_communications(
@@ -291,14 +293,27 @@ def communications_workbench(
         limit=page_size,
         offset=(page - 1) * page_size,
         workbench_filter=selected_status,
+        no_destination=no_destination,
         search=search_value,
     )
     counts = {
-        key: count_communications(db, user.company_id, workbench_filter=key, search=search_value)
+        key: count_communications(
+            db,
+            user.company_id,
+            workbench_filter=key,
+            no_destination=no_destination,
+            search=search_value,
+        )
         for key, _label in WORKBENCH_FILTER_OPTIONS
         if key != "all"
     }
-    counts["all"] = count_communications(db, user.company_id, workbench_filter="all", search=search_value)
+    counts["all"] = count_communications(
+        db,
+        user.company_id,
+        workbench_filter="all",
+        no_destination=no_destination,
+        search=search_value,
+    )
     return templates.TemplateResponse(
         "communications/workbench.html",
         {
@@ -308,6 +323,7 @@ def communications_workbench(
             "items": _workbench_rows(db, user.company_id, items),
             "counts": counts,
             "selected_status": selected_status,
+            "no_destination": no_destination,
             "search": search_value,
             "filter_options": WORKBENCH_FILTER_OPTIONS,
             "forwarding_status_labels": FORWARDING_STATUS_LABELS,

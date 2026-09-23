@@ -175,6 +175,47 @@ class CommunicationsWorkbenchTests(unittest.TestCase):
         self.assertIn("Alternativa para revisión", response.text)
         self.assertIn("Propuesta de reenvío: comercial@example.com", response.text)
 
+    def test_workbench_can_filter_review_exceptions_without_any_destination(self):
+        _user_id, department_id, alternative_id, mailbox_id = self._seed_workspace()
+        with self.session_factory() as db:
+            missing = self._communication(db, mailbox_id, "Sin propuesta de destino", routing_status="pending_review")
+            db.add(
+                RoutingDecision(
+                    company_id=1,
+                    communication_id=missing.id,
+                    department_id=None,
+                    category="consulta",
+                    confidence=0.42,
+                    requires_review=True,
+                    reason="No hay un destino suficiente.",
+                    status="pending_review",
+                    source="agent",
+                )
+            )
+            alternative = self._communication(db, mailbox_id, "Con alternativa", routing_status="pending_review")
+            db.add(
+                RoutingDecision(
+                    company_id=1,
+                    communication_id=alternative.id,
+                    department_id=None,
+                    alternative_department_id=alternative_id,
+                    category="consulta",
+                    confidence=0.53,
+                    requires_review=True,
+                    reason="Hay una alternativa revisable.",
+                    status="pending_review",
+                    source="agent",
+                )
+            )
+            db.commit()
+
+        with performance_test_client(self.fixture) as client:
+            response = client.get("/communications/workbench?status=pending_review&no_destination=1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Sin propuesta de destino", response.text)
+        self.assertNotIn("Con alternativa", response.text)
+
     def test_detail_shows_original_message_analysis_correction_timeline_and_forwarding(self):
         user_id, department_id, alternative_id, mailbox_id = self._seed_workspace()
         with self.session_factory() as db:

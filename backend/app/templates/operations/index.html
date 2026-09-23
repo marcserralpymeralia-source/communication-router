@@ -33,6 +33,7 @@
         <div><span>Con destino configurado</span><strong>{% if routing_metrics.coverage_percent is not none %}{{ routing_metrics.coverage_percent }}%{% else %}N/D{% endif %}</strong></div>
         <div><span>Pendientes de revisión</span><strong>{{ routing_metrics.pending_review }}</strong></div>
         <div><span>Sin departamento principal</span><strong class="{% if routing_metrics.without_primary %}metric-warning{% endif %}">{{ routing_metrics.without_primary }}</strong></div>
+        <div><span>Sin propuesta de destino</span><strong class="{% if routing_metrics.without_destination %}metric-warning{% endif %}"><a href="/communications/workbench?status=pending_review&no_destination=1">{{ routing_metrics.without_destination }}</a></strong></div>
         <div><span>Con alternativa disponible</span><strong>{{ routing_metrics.with_alternative }}</strong></div>
       </div>
       <p class="operations-timestamp">Prompt executions registradas: <strong>{{ routing_metrics.prompt_executions }}</strong></p>

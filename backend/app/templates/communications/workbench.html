@@ -19,13 +19,14 @@
       <input type="search" name="q" value="{{ search }}" placeholder="Buscar por remitente, asunto o departamento" autocomplete="off">
     </label>
     {% if selected_status != "all" %}<input type="hidden" name="status" value="{{ selected_status }}">{% endif %}
+    {% if no_destination %}<input type="hidden" name="no_destination" value="1">{% endif %}
     <button class="button" type="submit">Buscar</button>
-    {% if search %}<a class="button secondary" href="/communications/workbench{% if selected_status != 'all' %}?status={{ selected_status }}{% endif %}">Limpiar</a>{% endif %}
+    {% if search %}<a class="button secondary" href="/communications/workbench{% if selected_status != 'all' or no_destination %}?{% if selected_status != 'all' %}status={{ selected_status }}{% endif %}{% if selected_status != 'all' and no_destination %}&{% endif %}{% if no_destination %}no_destination=1{% endif %}{% endif %}">Limpiar</a>{% endif %}
   </form>
 
   <nav class="communications-filters" aria-label="Filtrar comunicaciones">
     {% for key, label in filter_options %}
-      <a class="communications-filter{% if selected_status == key %} is-active{% endif %}" href="/communications/workbench?status={{ key }}{% if search %}&q={{ search|urlencode }}{% endif %}">
+      <a class="communications-filter{% if selected_status == key %} is-active{% endif %}" href="/communications/workbench?status={{ key }}{% if no_destination %}&no_destination=1{% endif %}{% if search %}&q={{ search|urlencode }}{% endif %}">
         <span>{{ label }}</span><strong>{{ counts[key] }}</strong>
       </a>
     {% endfor %}
@@ -34,7 +35,7 @@
   <div class="communications-list-panel">
     <div class="communications-list-heading">
       <div>
-        <h3>{% for key, label in filter_options if key == selected_status %}{{ label }}{% endfor %}</h3>
+        <h3>{% for key, label in filter_options if key == selected_status %}{{ label }}{% endfor %}{% if no_destination %} · Sin destino{% endif %}</h3>
         <span class="muted">{{ items|length }} comunicaciones mostradas</span>
       </div>
       <span class="muted">Más urgentes primero</span>

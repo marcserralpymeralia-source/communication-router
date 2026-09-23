@@ -75,6 +75,7 @@ def _communication_filters(
     *,
     routing_status: str | None = None,
     workbench_filter: str | None = None,
+    no_destination: bool = False,
     search: str | None = None,
 ) -> list:
     filters = [Communication.company_id == company_id]
@@ -120,12 +121,27 @@ def _communication_filters(
                 additional_department_match,
             )
         )
-    if workbench_filter in WORKBENCH_FILTERS and workbench_filter != "all":
-        active_decision = select(RoutingDecision.id).where(
-            RoutingDecision.company_id == company_id,
-            RoutingDecision.communication_id == Communication.id,
-            RoutingDecision.status != "superseded",
+    active_decision = select(RoutingDecision.id).where(
+        RoutingDecision.company_id == company_id,
+        RoutingDecision.communication_id == Communication.id,
+        RoutingDecision.status != "superseded",
+    )
+    if no_destination:
+        decision_with_destination = active_decision.where(
+            or_(
+                RoutingDecision.department_id.is_not(None),
+                RoutingDecision.alternative_department_id.is_not(None),
+                RoutingDecision.final_department_id.is_not(None),
+                exists(
+                    select(RoutingDecisionDestination.id).where(
+                        RoutingDecisionDestination.company_id == company_id,
+                        RoutingDecisionDestination.routing_decision_id == RoutingDecision.id,
+                    )
+                ),
+            )
         )
+        filters.append(~exists(decision_with_destination))
+    if workbench_filter in WORKBENCH_FILTERS and workbench_filter != "all":
         failed_action = exists(
             select(RoutingAction.id).where(
                 RoutingAction.company_id == company_id,
@@ -176,13 +192,22 @@ def list_communications(
     offset: int = 0,
     routing_status: str | None = None,
     workbench_filter: str | None = None,
+    no_destination: bool = False,
     search: str | None = None,
 ) -> list[Communication]:
     safe_limit = max(min(int(limit or 50), 100), 1)
     safe_offset = max(int(offset or 0), 0)
     return db.scalars(
         select(Communication)
-        .where(*_communication_filters(company_id, routing_status=routing_status, workbench_filter=workbench_filter, search=search))
+        .where(
+            *_communication_filters(
+                company_id,
+                routing_status=routing_status,
+                workbench_filter=workbench_filter,
+                no_destination=no_destination,
+                search=search,
+            )
+        )
         .options(selectinload(Communication.attachments))
         .order_by(Communication.received_at.desc(), Communication.id.desc())
         .limit(safe_limit)
@@ -196,6 +221,7 @@ def count_communications(
     *,
     routing_status: str | None = None,
     workbench_filter: str | None = None,
+    no_destination: bool = False,
     search: str | None = None,
 ) -> int:
     return int(
@@ -205,6 +231,7 @@ def count_communications(
                     company_id,
                     routing_status=routing_status,
                     workbench_filter=workbench_filter,
+                    no_destination=no_destination,
                     search=search,
                 )
             )

@@ -7,7 +7,8 @@ from unittest.mock import patch
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Communication, Department, Mailbox, RoutingDecision
+from app.db.models import Communication, Department, Mailbox, RoutingDecision, RoutingDecisionDestination
+from app.operations.routes import _routing_metrics
 from scripts.performance_data import build_performance_fixture, performance_test_client
 
 
@@ -33,6 +34,8 @@ class KibakProductUxRouteTests(unittest.TestCase):
         self.assertIn("Centro de operaciones", operations.text)
         self.assertIn("Importación de comunicaciones", operations.text)
         self.assertIn("Cobertura de propuestas", operations.text)
+        self.assertIn("Sin propuesta de destino", operations.text)
+        self.assertIn("no_destination=1", operations.text)
         self.assertIn("Último correo recibido", operations.text)
         self.assertNotIn("payload_json", operations.text)
         self.assertNotIn("stack trace", operations.text.lower())
@@ -81,6 +84,61 @@ class KibakProductUxRouteTests(unittest.TestCase):
         self.assertIn("Incidencia de entrega", response.text)
         self.assertIn("incidencia_entrega", response.text)
         self.assertIn("Operaciones", response.text)
+
+    def test_operations_counts_additional_destination_as_coverage(self):
+        with Session(self.engine) as db:
+            communication = db.scalar(select(Communication).where(Communication.company_id == 1))
+            department = db.scalar(select(Department).where(Department.company_id == 1))
+            mailbox = db.scalar(select(Mailbox).where(Mailbox.company_id == 1))
+            if mailbox is None:
+                mailbox = Mailbox(company_id=1, name="Entrada", email_address="entrada@example.com")
+                db.add(mailbox)
+                db.flush()
+            if communication is None:
+                communication = Communication(
+                    company_id=1,
+                    mailbox_id=mailbox.id,
+                    external_message_id="<operations-coverage@example.com>",
+                    subject="Cobertura de destino",
+                    body_text="Prueba de observabilidad.",
+                    processing_status="processed",
+                    routing_status="pending_review",
+                )
+                db.add(communication)
+                db.flush()
+            if department is None:
+                department = Department(company_id=1, name="Destino", destination_email="destino@example.com")
+                db.add(department)
+                db.flush()
+            before = _routing_metrics(db, 1)
+            decision = RoutingDecision(
+                company_id=1,
+                communication_id=communication.id,
+                department_id=None,
+                category="consulta",
+                confidence=0.51,
+                requires_review=True,
+                reason="Requiere revisión.",
+                status="pending_review",
+                source="agent",
+                analysis_number=99,
+            )
+            db.add(decision)
+            db.flush()
+            db.add(
+                RoutingDecisionDestination(
+                    company_id=1,
+                    routing_decision_id=decision.id,
+                    department_id=department.id,
+                    role="informed",
+                    position=2,
+                )
+            )
+            db.commit()
+            after = _routing_metrics(db, 1)
+
+        self.assertEqual(after["with_destination"], before["with_destination"] + 1)
+        self.assertEqual(after["without_destination"], before["without_destination"])
 
 
 if __name__ == "__main__":

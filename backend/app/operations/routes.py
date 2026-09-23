@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.auth.dependencies import require_tenant_role
@@ -18,6 +18,7 @@ from app.db.models import (
     PromptExecution,
     RoutingAction,
     RoutingDecision,
+    RoutingDecisionDestination,
 )
 from app.master.database import get_master_db
 from app.master.models import MailboxSyncState
@@ -125,6 +126,13 @@ def _routing_metrics(db: Session, company_id: int) -> dict[str, object]:
                 primary_department.destination_email.is_not(None),
                 alternative_department.destination_email.is_not(None),
                 final_department.destination_email.is_not(None),
+                exists(
+                    select(RoutingDecisionDestination.id).where(
+                        RoutingDecisionDestination.company_id == company_id,
+                        RoutingDecisionDestination.routing_decision_id == RoutingDecision.id,
+                        RoutingDecisionDestination.department_id.is_not(None),
+                    )
+                ),
             ),
         )
     )
@@ -140,6 +148,7 @@ def _routing_metrics(db: Session, company_id: int) -> dict[str, object]:
         "without_primary": db.scalar(
             select(func.count(RoutingDecision.id)).where(company_filter, RoutingDecision.department_id.is_(None))
         ) or 0,
+        "without_destination": max(total - coverage, 0),
         "with_alternative": db.scalar(
             select(func.count(RoutingDecision.id)).where(
                 company_filter, RoutingDecision.alternative_department_id.is_not(None)
