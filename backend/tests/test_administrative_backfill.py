@@ -13,6 +13,7 @@ from app.db.database import Base
 from app.db.models import Company, Mailbox
 from app.master.service import TenantRole, TenantUser
 from app.mailboxes.routes import administrative_backfill_once
+from scripts.run_mailbox_backfill_once import validate_mailbox_safety
 
 
 class JsonRequest:
@@ -45,6 +46,7 @@ class AdministrativeBackfillTests(unittest.TestCase):
                 email_address="pilot@example.com",
                 provider="microsoft365",
                 connection_method="oauth2",
+                refresh_token_encrypted="test-ciphertext",
                 enabled=False,
                 auto_sync_enabled=False,
                 mark_as_read_after_import=False,
@@ -93,6 +95,14 @@ class AdministrativeBackfillTests(unittest.TestCase):
             response = asyncio.run(administrative_backfill_once(2, JsonRequest({}), db, object(), user))
         self.assertEqual(response.status_code, 400)
         run.assert_not_called()
+        db.close()
+
+    def test_simulation_auto_process_flag_does_not_block_admin_backfill(self):
+        db, _ = self._fixture()
+        mailbox = db.get(Mailbox, 2)
+        mailbox.auto_process_on_fetch = True
+        db.commit()
+        validate_mailbox_safety(mailbox)
         db.close()
 
     def test_admin_confirmation_uses_authenticated_context_and_safe_metrics(self):

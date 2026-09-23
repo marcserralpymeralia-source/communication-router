@@ -136,8 +136,9 @@ def validate_mailbox_safety(mailbox: Mailbox) -> None:
         raise RuntimeError("SMTP debe permanecer desactivado.")
     if mailbox.move_after_processing:
         raise RuntimeError("move_after_processing debe estar desactivado.")
-    if mailbox.auto_process_on_fetch:
-        raise RuntimeError("auto_process_on_fetch debe estar desactivado.")
+    # The administrative path always passes auto_process=False to the canonical
+    # importer. The mailbox flag may remain enabled for the normal simulation
+    # flow and must not block this explicitly non-routing backfill.
 
 
 def _storage_reference_is_tenant_scoped(storage_ref: str | None, tenant_id: int, prefix: str) -> bool:
