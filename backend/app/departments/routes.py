@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
+from app.core.config import get_settings
 from app.core.templating import templates
 from app.db.models import User
 from app.departments.service import (
@@ -109,6 +110,10 @@ def _friendly_error(exc: Exception) -> str:
     return str(exc) or "No se han podido guardar los cambios."
 
 
+def _hide_demo_destinations_from_ui() -> bool:
+    return get_settings().app_slug.strip().lower() == "kibak"
+
+
 def _tenant_users(db: Session, company_id: int) -> list[User]:
     return list(
         db.scalars(
@@ -151,7 +156,15 @@ def _detail_context(request: Request, db: Session, user: TenantUser, department)
         "all_users": _tenant_users(db, user.company_id),
         "knowledge_types": KNOWLEDGE_TYPES,
         "knowledge_priorities": tuple((item, item.title()) for item in KNOWLEDGE_PRIORITIES),
-        "related_departments": [item for item in list_departments(db, user.company_id) if item.id != department.id],
+        "related_departments": [
+            item
+            for item in list_departments(
+                db,
+                user.company_id,
+                hide_demo_destinations=_hide_demo_destinations_from_ui(),
+            )
+            if item.id != department.id
+        ],
         "raci_roles": RACI_ROLES,
         "can_edit": _can_edit(user),
         "message": request.query_params.get("message"),
@@ -161,7 +174,11 @@ def _detail_context(request: Request, db: Session, user: TenantUser, department)
 
 @router.get("")
 def departments_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    departments = list_departments(db, user.company_id)
+    departments = list_departments(
+        db,
+        user.company_id,
+        hide_demo_destinations=_hide_demo_destinations_from_ui(),
+    )
     items = [_summary(db, department) for department in departments]
     if _is_json(request):
         return JSONResponse({"ok": True, "items": items})

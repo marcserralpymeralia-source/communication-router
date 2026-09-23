@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import Department, DepartmentKnowledge, DepartmentMember, RaciAssignment, User
@@ -65,10 +65,26 @@ def get_department(db: Session, company_id: int, department_id: int) -> Departme
     return db.scalar(_department_query(company_id, department_id))
 
 
-def list_departments(db: Session, company_id: int, *, active_only: bool = False) -> list[Department]:
+def list_departments(
+    db: Session,
+    company_id: int,
+    *,
+    active_only: bool = False,
+    hide_demo_destinations: bool = False,
+) -> list[Department]:
     statement = select(Department).where(Department.company_id == company_id)
     if active_only:
         statement = statement.where(Department.active.is_(True))
+    if hide_demo_destinations:
+        statement = statement.where(
+            or_(
+                Department.destination_email.is_(None),
+                and_(
+                    ~Department.destination_email.ilike("%@empresa-demo.local"),
+                    ~Department.destination_email.ilike("%@example.test"),
+                ),
+            )
+        )
     return list(db.scalars(statement.order_by(Department.name, Department.id)))
 
 

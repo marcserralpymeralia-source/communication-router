@@ -29,7 +29,7 @@ from app.departments.routes import (
     update_knowledge_route,
     update_raci_route,
 )
-from app.departments.service import create_department, create_department_knowledge
+from app.departments.service import create_department, create_department_knowledge, list_departments
 from app.master.service import TenantRole, TenantUser
 
 
@@ -76,6 +76,20 @@ class DepartmentRouteTests(unittest.TestCase):
             payload = response_json(response)
             self.assertEqual([item["id"] for item in payload["items"]], [own.id])
             self.assertEqual(response_json(department_detail(foreign.id, FakeRequest(), db, self.admin))["ok"], False)
+
+    def test_kibak_ui_can_hide_demo_destination_departments_without_deleting_them(self):
+        with self.session_factory() as db:
+            real = create_department(db, 1, name="Operaciones", destination_email="operaciones@ingesco.com")
+            demo = create_department(db, 1, name="Demo", destination_email="demo@empresa-demo.local")
+            fixture = create_department(db, 1, name="Fixture", destination_email="fixture@example.test")
+
+            visible = list_departments(db, 1, hide_demo_destinations=True)
+            response = departments_page(FakeRequest(), db, self.admin)
+
+            self.assertEqual([item.id for item in visible], [real.id])
+            self.assertEqual([item["id"] for item in response_json(response)["items"]], [real.id])
+            self.assertIsNotNone(db.get(Department, demo.id))
+            self.assertIsNotNone(db.get(Department, fixture.id))
 
     def test_create_edit_invalid_email_and_activation(self):
         with self.session_factory() as db:
