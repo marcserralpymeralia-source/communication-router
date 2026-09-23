@@ -6,7 +6,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("APP_ENV", "test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -94,21 +94,21 @@ class OneShotMailboxBackfillTests(unittest.TestCase):
         self.assertEqual(state.last_checkpoint_uid, "20")
         self.assertEqual(state.backfill_last_uid, "20")
 
-    def test_disabled_mailbox_is_allowed_without_mutating_safety_flags(self):
+    def test_active_mailbox_is_allowed_without_mutating_safety_flags(self):
         mailbox = SimpleNamespace(
             provider="microsoft365",
             connection_method="oauth2",
             refresh_token_encrypted="ciphertext",
-            enabled=False,
-            auto_sync_enabled=False,
+            enabled=True,
+            auto_sync_enabled=True,
             mark_as_read_after_import=False,
             smtp_enabled=False,
             move_after_processing=False,
             auto_process_on_fetch=False,
         )
         runner.validate_mailbox_safety(mailbox)
-        self.assertFalse(mailbox.enabled)
-        self.assertFalse(mailbox.auto_sync_enabled)
+        self.assertTrue(mailbox.enabled)
+        self.assertTrue(mailbox.auto_sync_enabled)
         self.assertFalse(mailbox.mark_as_read_after_import)
 
     def test_unsafe_mailbox_is_rejected_instead_of_repaired(self):
@@ -117,15 +117,77 @@ class OneShotMailboxBackfillTests(unittest.TestCase):
             connection_method="oauth2",
             refresh_token_encrypted="ciphertext",
             enabled=True,
-            auto_sync_enabled=False,
+            auto_sync_enabled=True,
+            mark_as_read_after_import=False,
+            smtp_enabled=False,
+            move_after_processing=False,
+            auto_process_on_fetch=True,
+        )
+        with self.assertRaises(RuntimeError):
+            runner.validate_mailbox_safety(mailbox)
+        self.assertTrue(mailbox.enabled)
+
+    def test_active_sync_is_paused_by_lease_and_restored_after_backfill(self):
+        args = argparse.Namespace(company_slug="kibak-pilot", since="2026-09-14", to=None)
+        settings = SimpleNamespace(
+            app_slug="kibak",
+            environment="production",
+            storage_backend="s3",
+            s3_bucket="bucket",
+            s3_endpoint_url="https://storage.example",
+            s3_access_key_id="access",
+            s3_secret_access_key="secret",
+        )
+        mailbox = SimpleNamespace(
+            id=2,
+            provider="microsoft365",
+            connection_method="oauth2",
+            refresh_token_encrypted="ciphertext",
+            enabled=True,
+            auto_sync_enabled=True,
             mark_as_read_after_import=False,
             smtp_enabled=False,
             move_after_processing=False,
             auto_process_on_fetch=False,
         )
-        with self.assertRaises(RuntimeError):
-            runner.validate_mailbox_safety(mailbox)
-        self.assertTrue(mailbox.enabled)
+        company = SimpleNamespace(id=1)
+        state = SimpleNamespace(last_seen_uid="10", enabled=True, backfill_status="idle")
+        master_db = MagicMock()
+        tenant_db = MagicMock()
+        tenant_db.scalar.return_value = object()
+        canonical_result = {"ok": True, "found": 2, "saved": 2, "duplicates": 0, "attachments": 0, "errors": 0}
+        enabled_during_call = []
+
+        def execute(*_args, **kwargs):
+            enabled_during_call.append(kwargs["sync_state"].enabled)
+            return canonical_result
+
+        with (
+            patch.object(runner, "get_or_create_mailbox_sync_state", return_value=state),
+            patch.object(runner, "_acquire_lock", return_value=True) as acquire,
+            patch.object(runner, "_release_lock") as release,
+            patch.object(runner, "load_routing_policy", return_value=SimpleNamespace(simulation_mode=True, auto_forwarding_enabled=False)),
+            patch.object(runner, "_counts", side_effect=[{"communications": 0, "attachments": 0, "prompt_executions": 0, "routing_decisions": 0, "routing_actions": 0, "background_jobs": 0}, {"communications": 2, "attachments": 0, "prompt_executions": 0, "routing_decisions": 0, "routing_actions": 0, "background_jobs": 0}]),
+            patch.object(runner, "_execute_canonical_backfill", side_effect=execute),
+            patch.object(runner, "_storage_audit", return_value={}),
+            patch.object(runner, "_received_range", return_value={"first_received_at": None, "last_received_at": None}),
+        ):
+            result = runner.run_backfill_in_context(
+                args,
+                settings=settings,
+                master_db=master_db,
+                tenant_db=tenant_db,
+                company=company,
+                mailbox=mailbox,
+                database_name="kibak_tenant_quibac",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(enabled_during_call, [False])
+        self.assertTrue(state.enabled)
+        acquire.assert_called_once_with(master_db, state, owner="admin-backfill")
+        release.assert_called_once()
+        self.assertTrue(release.call_args.kwargs["success"])
 
     def test_storage_reference_requires_tenant_prefix(self):
         self.assertTrue(

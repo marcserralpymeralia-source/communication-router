@@ -41,6 +41,7 @@ from app.master.models import MasterCompany, MasterTenantDatabase  # noqa: E402
 from app.routing.policy import load_routing_policy  # noqa: E402
 from app.settings.integrations import backfill_imap_emails  # noqa: E402
 from app.tenancy.database import tenant_db_session  # noqa: E402
+from app.workers.email_worker import _acquire_lock, _release_lock  # noqa: E402, PLC2701
 
 
 REQUIRED_SINCE = date(2026, 9, 14)
@@ -122,17 +123,13 @@ def _validate_runtime(settings) -> None:  # noqa: ANN001
 
 
 def validate_mailbox_safety(mailbox: Mailbox) -> None:
-    """Fail closed; never enable or otherwise repair a mailbox here."""
+    """Fail closed; the caller serializes active sync with a mailbox lease."""
     if (mailbox.provider or "").strip().lower() != "microsoft365":
         raise RuntimeError("El buzón piloto no es Microsoft 365.")
     if (mailbox.connection_method or "").strip().lower() != "oauth2":
         raise RuntimeError("El buzón piloto no usa OAuth2.")
     if not mailbox.refresh_token_encrypted:
         raise RuntimeError("El buzón piloto no tiene credencial OAuth almacenada.")
-    if mailbox.enabled:
-        raise RuntimeError("El buzón debe permanecer desactivado durante este backfill.")
-    if mailbox.auto_sync_enabled:
-        raise RuntimeError("El auto-sync debe permanecer desactivado.")
     if mailbox.mark_as_read_after_import:
         raise RuntimeError("mark_as_read_after_import debe estar desactivado.")
     if mailbox.smtp_enabled:
@@ -278,24 +275,38 @@ def run_backfill_in_context(
         raise RuntimeError("La policy efectiva no cumple simulation=true y forwarding=false.")
 
     sync_state = get_or_create_mailbox_sync_state(master_db, mailbox, commit=True)
-    if sync_state.enabled:
-        raise RuntimeError("MailboxSyncState no puede estar habilitado durante el backfill.")
+    if not _acquire_lock(master_db, sync_state, owner="admin-backfill"):
+        raise RuntimeError("Ya existe una sincronización o backfill en curso.")
     normal_cursor_before = sync_state.last_seen_uid
+    restore_sync_enabled = bool(mailbox.enabled and mailbox.auto_sync_enabled)
+    sync_state.enabled = False
+    master_db.commit()
     counts_before = _counts(tenant_db, company.id)
     started = monotonic()
-    result = _execute_canonical_backfill(
-        tenant_db,
-        mailbox,
-        company.id,
-        since=since.isoformat(),
-        to=to.isoformat(),
-        sync_state=sync_state,
-        master_db=master_db,
-        mailbox_id=mailbox.id,
-    )
-    counts_after = _counts(tenant_db, company.id)
-    master_db.refresh(sync_state)
-    storage = _storage_audit(tenant_db, settings, company.id)
+    result = None
+    operation_ok = False
+    try:
+        result = _execute_canonical_backfill(
+            tenant_db,
+            mailbox,
+            company.id,
+            since=since.isoformat(),
+            to=to.isoformat(),
+            sync_state=sync_state,
+            master_db=master_db,
+            mailbox_id=mailbox.id,
+        )
+        operation_ok = bool(result.get("ok"))
+        counts_after = _counts(tenant_db, company.id)
+        master_db.refresh(sync_state)
+        storage = _storage_audit(tenant_db, settings, company.id)
+    finally:
+        sync_state.enabled = restore_sync_enabled
+        _release_lock(master_db, sync_state, success=operation_ok, error=None if operation_ok else "Backfill administrativo detenido")
+        master_db.refresh(sync_state)
+
+    if result is None:
+        raise RuntimeError("El backfill administrativo no devolvió resultado.")
 
     return {
         "ok": bool(result.get("ok")),
