@@ -250,6 +250,31 @@ def _parse_backfill_range(args: argparse.Namespace) -> tuple[date, date]:
     return since, to
 
 
+def validate_backfill_in_context(
+    args: argparse.Namespace,
+    *,
+    settings,
+    master_db,
+    tenant_db,
+    company,
+    mailbox,
+    database_name: str | None,
+) -> tuple[date, date]:
+    """Run the full administrative preflight without opening IMAP."""
+    _validate_runtime(settings)
+    since, to = _parse_backfill_range(args)
+    if database_name != EXPECTED_TENANT_DATABASE:
+        raise RuntimeError("El contexto tenant no apunta a la base autorizada.")
+    validate_mailbox_safety(mailbox)
+    llm = tenant_db.scalar(select(LLMSettings).where(LLMSettings.company_id == company.id))
+    policy = load_routing_policy(tenant_db, company.id)
+    if llm is None:
+        raise RuntimeError("No existe LLMSettings para el tenant piloto.")
+    if not policy.simulation_mode or policy.auto_forwarding_enabled:
+        raise RuntimeError("La policy efectiva no cumple simulation=true y forwarding=false.")
+    return since, to
+
+
 def run_backfill_in_context(
     args: argparse.Namespace,
     *,
@@ -261,18 +286,16 @@ def run_backfill_in_context(
     database_name: str | None,
 ) -> dict[str, object]:
     """Run the one-shot operation using an already authenticated app context."""
-    _validate_runtime(settings)
-    since, to = _parse_backfill_range(args)
-    if database_name != EXPECTED_TENANT_DATABASE:
-        raise RuntimeError("El contexto tenant no apunta a la base autorizada.")
-    validate_mailbox_safety(mailbox)
-
-    llm = tenant_db.scalar(select(LLMSettings).where(LLMSettings.company_id == company.id))
+    since, to = validate_backfill_in_context(
+        args,
+        settings=settings,
+        master_db=master_db,
+        tenant_db=tenant_db,
+        company=company,
+        mailbox=mailbox,
+        database_name=database_name,
+    )
     policy = load_routing_policy(tenant_db, company.id)
-    if llm is None:
-        raise RuntimeError("No existe LLMSettings para el tenant piloto.")
-    if not policy.simulation_mode or policy.auto_forwarding_enabled:
-        raise RuntimeError("La policy efectiva no cumple simulation=true y forwarding=false.")
 
     sync_state = get_or_create_mailbox_sync_state(master_db, mailbox, commit=True)
     if not _acquire_lock(master_db, sync_state, owner="admin-backfill"):

@@ -83,6 +83,13 @@ def run_backfill_in_context(*args, **kwargs):  # noqa: ANN002, ANN003
     return runner(*args, **kwargs)
 
 
+def validate_backfill_in_context(*args, **kwargs):  # noqa: ANN002, ANN003
+    """Run the administrative preflight without opening IMAP."""
+    from scripts.run_mailbox_backfill_once import validate_backfill_in_context as validator
+
+    return validator(*args, **kwargs)
+
+
 def _can_edit(user: TenantUser) -> bool:
     return user.role.name in {"Administrador", "Superadmin"}
 
@@ -737,7 +744,7 @@ async def administrative_backfill_once(
     )
     args = Namespace(company_slug="kibak-pilot", since="2026-09-14", to=None)
     try:
-        result = run_backfill_in_context(
+        since, to = validate_backfill_in_context(
             args,
             settings=settings,
             master_db=master_db,
@@ -758,22 +765,32 @@ async def administrative_backfill_once(
             metadata={"ok": False, "error_type": type(exc).__name__},
         )
         return JSONResponse({"ok": False, "message": "Backfill detenido durante la validación o ejecución."}, status_code=409)
-
+    payload = {
+        "admin_backfill": True,
+        "auto_process": False,
+        "batch_size": 25,
+        "from_date": since.isoformat(),
+        "to_date": to.isoformat(),
+        "limit": None,
+        "mailbox_id": mailbox.id,
+        "unbounded": True,
+    }
+    job = enqueue_job(
+        db,
+        company_id=user.company_id,
+        job_type="backfill_imap",
+        payload=payload,
+        created_by_user_id=user.id,
+    )
     metrics = {
-        "range": result.get("range"),
-        "backfill": result.get("backfill"),
-        "counts_before": result.get("counts_before"),
-        "counts_after": result.get("counts_after"),
-        "count_deltas": result.get("count_deltas"),
-        "received_range": result.get("received_range"),
-        "storage": result.get("storage"),
+        "range": {"since": since.isoformat(), "to": to.isoformat()},
+        "job_id": job.id,
+        "status": job.status,
         "safety": {
             "auto_process": False,
-            "simulation_mode": result.get("policy", {}).get("simulation_mode"),
-            "auto_forwarding": result.get("policy", {}).get("auto_forwarding_enabled"),
-            "background_worker_started": result.get("execution", {}).get("background_worker_started"),
-            "openai_called": result.get("execution", {}).get("openai_called"),
-            "routing_jobs_enqueued": result.get("backfill", {}).get("routing_jobs_enqueued", 0),
+            "background_worker_started": False,
+            "openai_called": False,
+            "routing_jobs_enqueued": 0,
         },
     }
     log_action(
@@ -783,10 +800,10 @@ async def administrative_backfill_once(
         action="settings.mailbox.backfill_once.finish",
         entity_type="mailbox",
         entity_id=mailbox.id,
-        message="Backfill administrativo finalizado",
-        metadata={"ok": bool(result.get("ok")), "metrics": metrics},
+        message="Backfill administrativo encolado",
+        metadata={"ok": True, "metrics": metrics},
     )
-    return JSONResponse({"ok": bool(result.get("ok")), "metrics": metrics}, status_code=200 if result.get("ok") else 409)
+    return JSONResponse({"ok": True, "metrics": metrics}, status_code=202)
 
 
 @router.post("/{mailbox_id}/delete")

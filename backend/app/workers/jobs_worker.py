@@ -46,6 +46,7 @@ from app.tenancy.database import tenant_db_session
 from app.whatsapp.conversation_orders import evaluate_conversation_order
 from app.whatsapp.conversation_semantics import evaluate_whatsapp_conversation_semantics
 from app.whatsapp.service import send_automatic_response, whatsapp_config
+from app.workers.email_worker import _acquire_lock, _release_lock  # noqa: PLC2701
 
 logger = logging.getLogger(__name__)
 _worker_started = False
@@ -248,6 +249,10 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 "message": "Canal Email desactivado para este tenant",
             }
         master_db = MasterSessionLocal()
+        admin_lease = False
+        restore_sync_enabled = False
+        operation_ok = False
+        sync_state = None
         try:
             settings, sync_state, mailbox_id = _email_job_context(
                 db,
@@ -256,6 +261,17 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 payload,
                 allow_disabled=True,
             )
+            if payload.get("admin_backfill"):
+                if not _acquire_lock(master_db, sync_state, owner="admin-backfill-job"):
+                    return {
+                        "ok": False,
+                        "retryable": True,
+                        "message": "Ya existe una sincronización o backfill en curso.",
+                    }
+                admin_lease = True
+                restore_sync_enabled = bool(settings.enabled and settings.auto_sync_enabled)
+                sync_state.enabled = False
+                master_db.commit()
             unbounded = bool(payload.get("unbounded", False))
             requested_limit = None if unbounded else max(int(payload.get("limit") or 1), 1)
             pilot_runtime = get_settings().is_pilot_runtime
@@ -286,6 +302,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 unbounded=unbounded,
                 preserve_normal_cursor=True,
             )
+            operation_ok = bool(result.get("ok"))
 
             consumed = max(int(result.get("batch_count") or 0), 0)
             processed_before = max(int(payload.get("processed_count") or 0), 0)
@@ -309,6 +326,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                     "total_found": total_found,
                     "processed_count": processed_count,
                     "batch_size": batch_size,
+                    "admin_backfill": bool(payload.get("admin_backfill")),
                 }
                 if payload.get("mailbox_id") is not None:
                     continuation_payload["mailbox_id"] = payload["mailbox_id"]
@@ -326,6 +344,14 @@ def _process_job(db, job: BackgroundJob) -> dict:
 
             return result
         finally:
+            if admin_lease and sync_state is not None:
+                sync_state.enabled = restore_sync_enabled
+                _release_lock(
+                    master_db,
+                    sync_state,
+                    success=operation_ok,
+                    error=None if operation_ok else "Backfill administrativo detenido",
+                )
             master_db.close()
     if job.job_type == "process_pending_emails":
         processor = AgentProcessingService()

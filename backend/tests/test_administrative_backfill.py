@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -97,8 +98,10 @@ class AdministrativeBackfillTests(unittest.TestCase):
     def test_admin_confirmation_uses_authenticated_context_and_safe_metrics(self):
         db, user = self._fixture()
         with patch("app.mailboxes.routes.get_settings", return_value=self.settings), patch("app.mailboxes.routes.log_action"), patch(
-            "app.mailboxes.routes.run_backfill_in_context", return_value=self._result()
-        ) as run:
+            "app.mailboxes.routes.validate_backfill_in_context", return_value=(date(2026, 9, 14), date(2026, 9, 23))
+        ) as validate, patch(
+            "app.mailboxes.routes.enqueue_job", return_value=SimpleNamespace(id=101, status="queued")
+        ) as enqueue:
             response = asyncio.run(
                 administrative_backfill_once(
                     2,
@@ -108,11 +111,17 @@ class AdministrativeBackfillTests(unittest.TestCase):
                     user,
                 )
             )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         self.assertTrue(response.body.find(b'"auto_process":false') >= 0)
         self.assertTrue(response.body.find(b'"routing_jobs_enqueued":0') >= 0)
-        self.assertEqual(run.call_args.args[0].since, "2026-09-14")
-        self.assertEqual(run.call_args.kwargs["database_name"], "kibak_tenant_quibac")
+        self.assertTrue(response.body.find(b'"job_id":101') >= 0)
+        validate.assert_called_once()
+        payload = enqueue.call_args.kwargs["payload"]
+        self.assertEqual(payload["from_date"], "2026-09-14")
+        self.assertEqual(payload["to_date"], "2026-09-23")
+        self.assertEqual(payload["batch_size"], 25)
+        self.assertTrue(payload["admin_backfill"])
+        self.assertFalse(payload["auto_process"])
         db.close()
 
     def test_feature_flag_is_closed_by_default(self):

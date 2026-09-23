@@ -28,7 +28,7 @@ from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJ
 from app.imports.service import create_preview  # noqa: E402
 from app.jobs.service import claim_next_job, enqueue_job, execute_job_inline, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
-from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.master.models import CompanyMembership, MailboxSyncState, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import _process_import_job, _process_job, run_worker_cycle  # noqa: E402
@@ -247,6 +247,119 @@ class JobsReliabilityTests(unittest.TestCase):
                 "2026-08-20",
             )
             self.assertNotIn("from_uid", continuation_payload)
+        finally:
+            db.close()
+
+    def test_administrative_backfill_pauses_and_restores_sync_across_continuation(self):
+        self._seed_master()
+
+        master_db = self.MasterSession()
+        master_db.add(
+            MailboxSyncState(
+                company_id=1,
+                mailbox_id=1,
+                enabled=True,
+                frequency_seconds=60,
+                status="idle",
+            )
+        )
+        master_db.commit()
+        master_db.close()
+
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=True,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            db.add(
+                Mailbox(
+                    id=1,
+                    company_id=1,
+                    name="Microsoft piloto",
+                    email_address="pilot@example.com",
+                    provider="microsoft365",
+                    connection_method="oauth2",
+                    enabled=True,
+                    auto_sync_enabled=True,
+                    mark_as_read_after_import=False,
+                )
+            )
+            db.commit()
+
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="backfill_imap",
+                payload={
+                    "admin_backfill": True,
+                    "mailbox_id": 1,
+                    "from_date": "2026-09-14",
+                    "to_date": "2026-09-23",
+                    "unbounded": True,
+                    "batch_size": 1,
+                },
+                created_by_user_id=1,
+            )
+
+            with patch(
+                "app.workers.jobs_worker.MasterSessionLocal",
+                new=self.MasterSession,
+            ), patch(
+                "app.workers.jobs_worker.backfill_imap_emails",
+                return_value={
+                    "ok": True,
+                    "saved": 1,
+                    "duplicates": 0,
+                    "has_more": True,
+                    "batch_count": 1,
+                    "found": 2,
+                },
+            ) as backfill:
+                result = _process_job(db, job)
+
+            self.assertTrue(result["ok"])
+            backfill.assert_called_once()
+            master_check = self.MasterSession()
+            try:
+                state = master_check.scalar(
+                    select(MailboxSyncState).where(
+                        MailboxSyncState.company_id == 1,
+                        MailboxSyncState.mailbox_id == 1,
+                    )
+                )
+            finally:
+                master_check.close()
+            self.assertTrue(state.enabled)
+            self.assertIsNone(state.lock_owner)
+            self.assertEqual(state.status, "idle")
+
+            jobs = db.scalars(
+                select(BackgroundJob)
+                .where(
+                    BackgroundJob.company_id == 1,
+                    BackgroundJob.job_type == "backfill_imap",
+                )
+                .order_by(BackgroundJob.id)
+            ).all()
+            self.assertEqual(len(jobs), 2)
+            continuation_payload = __import__(
+                "app.jobs.service",
+                fromlist=["job_payload"],
+            ).job_payload(jobs[1])
+            self.assertTrue(continuation_payload["admin_backfill"])
+            self.assertTrue(continuation_payload["resume"])
         finally:
             db.close()
 
