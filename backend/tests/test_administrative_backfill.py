@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from argparse import Namespace
 import unittest
 from datetime import date
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from app.db.database import Base
 from app.db.models import Company, Mailbox
 from app.master.service import TenantRole, TenantUser
 from app.mailboxes.routes import administrative_backfill_once
-from scripts.run_mailbox_backfill_once import validate_mailbox_safety
+from scripts.run_mailbox_backfill_once import validate_backfill_in_context, validate_mailbox_safety
 
 
 class JsonRequest:
@@ -103,6 +104,20 @@ class AdministrativeBackfillTests(unittest.TestCase):
         mailbox.auto_process_on_fetch = True
         db.commit()
         validate_mailbox_safety(mailbox)
+        db.close()
+
+    def test_database_binding_mismatch_still_fails_closed(self):
+        db, _ = self._fixture()
+        with self.assertRaises(RuntimeError):
+            validate_backfill_in_context(
+                Namespace(company_slug="kibak-pilot", since="2026-09-14", to=None),
+                settings=self.settings,
+                master_db=db,
+                tenant_db=db,
+                company=db.get(Company, 1),
+                mailbox=db.get(Mailbox, 2),
+                database_name="other_database",
+            )
         db.close()
 
     def test_admin_confirmation_uses_authenticated_context_and_safe_metrics(self):

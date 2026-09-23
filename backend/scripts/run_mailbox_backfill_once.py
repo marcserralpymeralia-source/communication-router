@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 from time import monotonic
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -265,7 +265,15 @@ def validate_backfill_in_context(
     _validate_runtime(settings)
     since, to = _parse_backfill_range(args)
     if database_name != EXPECTED_TENANT_DATABASE:
-        raise RuntimeError("El contexto tenant no apunta a la base autorizada.")
+        # The master binding is canonical, but a managed Postgres URL may use
+        # an endpoint/path representation that does not preserve the database
+        # name. Verify the already-open tenant session before failing closed.
+        try:
+            current_database = tenant_db.execute(text("SELECT current_database()")).scalar()
+        except Exception:  # noqa: BLE001
+            current_database = None
+        if current_database != EXPECTED_TENANT_DATABASE:
+            raise RuntimeError("El contexto tenant no apunta a la base autorizada.")
     validate_mailbox_safety(mailbox)
     llm = tenant_db.scalar(select(LLMSettings).where(LLMSettings.company_id == company.id))
     policy = load_routing_policy(tenant_db, company.id)
