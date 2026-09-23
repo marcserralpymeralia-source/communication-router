@@ -128,6 +128,34 @@ class MailboxFoundationTests(unittest.TestCase):
             self.assertEqual(master_db.get(MailboxSyncState, state_b.id).last_seen_uid, None)
             self.assertEqual(master_db.get(MailboxSyncState, state_b.id).last_error_message, None)
 
+    def test_reactivating_mailbox_reschedules_stale_sync_state(self):
+        with self.tenant_session() as db, self.master_session() as master_db:
+            db.add(Company(id=1, name="Tenant A"))
+            mailbox = Mailbox(
+                company_id=1,
+                name="Buzón activo",
+                email_address="inbox@example.com",
+                enabled=True,
+                auto_sync_enabled=True,
+            )
+            db.add(mailbox)
+            db.commit()
+            db.refresh(mailbox)
+
+            state = MailboxSyncState(
+                company_id=1,
+                mailbox_id=mailbox.id,
+                enabled=False,
+                next_run_at=None,
+            )
+            master_db.add(state)
+            master_db.commit()
+
+            refreshed = get_or_create_mailbox_sync_state(master_db, mailbox)
+
+            self.assertTrue(refreshed.enabled)
+            self.assertIsNotNone(refreshed.next_run_at)
+
     def test_two_tenants_keep_mailbox_configuration_independent(self):
         with self.tenant_session() as db:
             db.add_all([Company(id=1, name="Tenant A"), Company(id=2, name="Tenant B")])

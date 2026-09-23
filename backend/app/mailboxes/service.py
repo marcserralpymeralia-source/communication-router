@@ -59,7 +59,10 @@ def get_or_create_mailbox_sync_state(
 
 
 def sync_state_from_mailbox(state: MailboxSyncState, mailbox: Mailbox) -> None:
+    was_enabled = bool(state.enabled)
     state.enabled = bool(mailbox.enabled and mailbox.auto_sync_enabled)
+    if state.enabled and (not was_enabled or state.next_run_at is None):
+        state.next_run_at = now_utc()
     try:
         state.frequency_seconds = max(int(getattr(mailbox, "polling_frequency_minutes", 1) or 1), 1) * 60
     except (TypeError, ValueError):

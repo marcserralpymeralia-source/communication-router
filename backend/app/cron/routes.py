@@ -5,7 +5,7 @@ import hmac
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.channels.service import is_channel_enabled
@@ -147,16 +147,29 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             result["tenants"].append({"company_id": tenant.company_id, "ok": False, "message": str(exc)})
         finally:
             db.close()
+    mailbox_due_conditions = [
+        MasterTenantDatabase.is_active.is_(True),
+        MasterTenantDatabase.database_url.is_not(None),
+    ]
+    if kibak_runtime:
+        mailbox_due_conditions.append(
+            or_(
+                MailboxSyncState.next_run_at.is_(None),
+                MailboxSyncState.next_run_at <= now,
+            )
+        )
+    else:
+        mailbox_due_conditions.extend(
+            [
+                MailboxSyncState.enabled.is_(True),
+                MailboxSyncState.next_run_at.is_not(None),
+                MailboxSyncState.next_run_at <= now,
+            ]
+        )
     due_mailbox_states = master_db.scalars(
         select(MailboxSyncState)
         .join(MasterTenantDatabase, MasterTenantDatabase.company_id == MailboxSyncState.company_id)
-        .where(
-            MasterTenantDatabase.is_active.is_(True),
-            MasterTenantDatabase.database_url.is_not(None),
-            MailboxSyncState.enabled.is_(True),
-            MailboxSyncState.next_run_at.is_not(None),
-            MailboxSyncState.next_run_at <= now,
-        )
+        .where(*mailbox_due_conditions)
     ).all()
     result["checked"] += len(due_mailbox_states)
     for state in due_mailbox_states:
